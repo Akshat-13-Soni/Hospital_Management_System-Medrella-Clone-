@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 type Slot = { startTime: string; endTime: string };
 
@@ -51,8 +52,8 @@ export function SlotPicker({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="max-w-xs space-y-2">
+    <div className="space-y-5">
+      <div className="space-y-2">
         <Label htmlFor="date">Date</Label>
         <Input id="date" type="date" min={today} value={date} onChange={(e) => setDate(e.target.value)} />
       </div>
@@ -60,20 +61,37 @@ export function SlotPicker({
       <div>
         <Label className="mb-2 block">Available slots</Label>
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading slots...</p>
-        ) : slots.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No slots available on this date. Try another day.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-            {slots.map((s) => (
-              <Button
-                key={s.startTime} type="button" size="sm"
-                variant={selected === s.startTime ? "default" : "outline"}
-                onClick={() => setSelected(s.startTime)}
-              >
-                {s.startTime}
-              </Button>
+          <div className="grid grid-cols-3 gap-2" aria-busy="true">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-9 animate-pulse rounded-md bg-muted" />
             ))}
+          </div>
+        ) : slots.length === 0 ? (
+          <p className="rounded-lg bg-muted px-3 py-3 text-sm text-muted-foreground">
+            No slots available on this date. Try another day.
+          </p>
+        ) : (
+          <div className="grid grid-cols-3 gap-2">
+            {slots.map((s) => {
+              const active = selected === s.startTime;
+              return (
+                <button
+                  key={s.startTime}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setSelected(s.startTime)}
+                  className={cn(
+                    "h-9 rounded-md border text-sm font-medium transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0E6B58] focus-visible:ring-offset-2",
+                    active
+                      ? "border-[#0E6B58] bg-[#0E6B58] text-white"
+                      : "bg-background hover:border-[#0E6B58] hover:bg-[#EAF5F1]"
+                  )}
+                >
+                  {s.startTime}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -81,13 +99,32 @@ export function SlotPicker({
       {!appointmentId && (
         <div className="space-y-2">
           <Label htmlFor="reason">Reason for visit (optional)</Label>
-          <Textarea id="reason" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          <Textarea
+            id="reason" rows={3} value={reason} maxLength={500}
+            placeholder="Briefly describe your symptoms or concern"
+            onChange={(e) => setReason(e.target.value)}
+          />
         </div>
       )}
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {selected && (
+        <p className="rounded-lg bg-[#EAF5F1] px-3 py-2 text-sm text-[#10231F]">
+          Selected: <span className="font-semibold">{date}</span> at{" "}
+          <span className="font-semibold">{selected}</span>
+        </p>
+      )}
 
-      <Button onClick={confirm} disabled={!selected || pending}>
+      {error && (
+        <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
+
+      <Button
+        onClick={confirm}
+        disabled={!selected || pending}
+        className="w-full bg-[#0E6B58] text-white hover:bg-[#0B5646]"
+      >
         {pending ? "Saving..." : appointmentId ? "Confirm new time" : "Confirm booking"}
       </Button>
     </div>

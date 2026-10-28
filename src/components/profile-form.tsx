@@ -39,11 +39,18 @@ export function ProfileForm(d: Props) {
       </div>
       <div className="space-y-2">
         <Label htmlFor="bio">Bio</Label>
-        <Textarea id="bio" name="bio" defaultValue={d.bio ?? ""} />
+        <Textarea
+          id="bio" name="bio" rows={4} defaultValue={d.bio ?? ""}
+          placeholder="A short introduction patients will see on your profile"
+        />
       </div>
       <div className="flex items-center gap-3">
-        <Button type="submit" disabled={pending}>{pending ? "Saving..." : "Save profile"}</Button>
-        {state?.success && <span className="text-sm text-emerald-600">Profile saved</span>}
+        <Button type="submit" disabled={pending} className="bg-[#0E6B58] text-white hover:bg-[#0B5646]">
+          {pending ? "Saving..." : "Save profile"}
+        </Button>
+        {state?.success && (
+          <span role="status" className="text-sm font-medium text-[#0E6B58]">Profile saved</span>
+        )}
       </div>
     </form>
   );
