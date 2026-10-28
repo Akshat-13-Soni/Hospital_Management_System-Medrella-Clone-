@@ -32,7 +32,7 @@ export default async function ReschedulePage({ params }: { params: Promise<{ id:
         <div className="text-sm">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Current appointment</p>
           <p className="font-semibold text-[#10231F]">{appt.doctorName}</p>
-          <p>{prettyDate(appt.date)}, {appt.startTime}</p>
+          <p>{prettyDate(appt.date)}, {appt.startTime} to {appt.endTime}</p>
         </div>
       </div>
 

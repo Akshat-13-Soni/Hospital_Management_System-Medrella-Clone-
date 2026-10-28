@@ -130,6 +130,7 @@ export async function getPatientAppointment(id: string, patientId: string) {
       doctorId: appointments.doctorId,
       date: appointments.date,
       startTime: appointments.startTime,
+      endTime: appointments.endTime,
       status: appointments.status,
       doctorName: users.name,
       specialization: doctors.specialization,

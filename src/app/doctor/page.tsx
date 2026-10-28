@@ -97,7 +97,7 @@ export default async function DoctorDashboard() {
               <DateBlock date={a.date} />
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-[#10231F]">{a.patientName}</p>
-                <p className="text-muted-foreground">{prettyDate(a.date)}, {a.startTime}</p>
+                <p className="text-muted-foreground">{prettyDate(a.date)}, {a.startTime} to {a.endTime}</p>
               </div>
               <StatusBadge status={a.status} />
             </div>

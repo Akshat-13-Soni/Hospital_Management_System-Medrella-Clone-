@@ -78,8 +78,8 @@ export default async function PatientDashboard() {
             <div className="min-w-0 flex-1 text-sm">
               <p className="font-semibold text-[#10231F]">{a.doctorName}</p>
               <p className="text-muted-foreground">{a.specialization}</p>
-              <p className="mt-1">
-                {prettyDate(a.date)}, {a.startTime} to {a.endTime}
+              <p className="text-muted-foreground">
+                {a.specialization} · {prettyDate(a.date)}, {a.startTime} to {a.endTime}
               </p>
               {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
             </div>
