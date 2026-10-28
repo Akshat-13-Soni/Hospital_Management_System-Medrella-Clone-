@@ -1,36 +1,108 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Medrella Appointment Booking App
 
-## Getting Started
+A full-stack appointment booking application with patient and doctor roles, built for the internship task using the Medrella demo as the starting point.
 
-First, run the development server:
+**Live app:** https://hospital-management-system-nine-henna.vercel.app
+**Repository:** https://github.com/Akshat-13-Soni/Hospital_Management_System-Medrella-Clone-
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Demo accounts
+
+| Role | Email | Password |
+|---|---|---|
+| Doctor (Cardiology) | ananya@demo.com | password123 |
+| Doctor (Dermatology) | rahul@demo.com | password123 |
+| Doctor (Pediatrics) | priya@demo.com | password123 |
+| Patient | Sign up through the UI | |
+
+Each seeded doctor works Monday to Friday, 09:00 to 17:00, in 30-minute slots.
+
+## Features
+
+**Authentication and sessions**
+- Email and password signup and login with a role (patient or doctor)
+- Passwords hashed with bcrypt
+- JWT stored in an httpOnly cookie (7-day expiry)
+- Role-based route guards (a patient cannot open the doctor dashboard and vice versa)
+
+**Patient**
+- Browse and search doctors by name or specialization
+- View doctor profile, fee and working hours
+- Book an appointment from live, available slots
+- View upcoming and past appointments
+- Reschedule (with reschedule history) and cancel
+- In-app notifications, such as "Your appointment with Dr. XYZ on DD/MM/YYYY at HH:MM is confirmed."
+
+**Doctor**
+- Dashboard with upcoming, completed and cancelled counts
+- See every booking with patient name, email, time and reason
+- Mark appointments complete or cancel them (the patient is notified)
+- Manage weekly availability (working hours and slot length per weekday)
+- Edit profile (specialization, experience, fee, bio, clinic address)
+- Notified when a patient books, reschedules or cancels
+
+**Reliability**
+- Slots are generated on the fly from availability, minus booked and past slots (IST)
+- Double booking is prevented at the database level with a partial unique index on `(doctor_id, date, start_time)` where `status = 'booked'`, plus server-side re-validation
+
+## Tech stack
+
+- Next.js (App Router) and TypeScript, with Server Actions as the backend
+- Tailwind CSS and shadcn/ui
+- PostgreSQL on Neon, accessed with Drizzle ORM
+- Zod for validation
+- bcryptjs and jose for authentication
+- Deployed on Vercel
+
+## Project structure
+
+```
+src/
+  actions/      Server Actions (auth, doctor, appointments, notifications, slots)
+  app/          Routes: /, /login, /signup, /doctors, /doctors/[id],
+                /patient, /patient/reschedule/[id], /doctor, /notifications
+  components/   Navbar, slot picker, forms, shadcn/ui components
+  db/           Drizzle schema and client
+  lib/          Session, auth guards, queries, slot helpers, validators
+scripts/
+  seed.ts       Seeds demo doctors and availability
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Database schema
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`users`, `doctors`, `availability`, `appointments`, `notifications`, `reschedule_history`.
+Roles and appointment status are Postgres enums.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Run locally
 
-## Learn More
+1. Clone the repo and install dependencies:
+   ```bash
+   npm install
+   ```
+2. Create `.env.local` in the project root:
+   ```
+   DATABASE_URL=postgresql://<user>:<password>@<host>/<db>?sslmode=require
+   JWT_SECRET=<a long random string>
+   ```
+3. Create the tables and seed demo data:
+   ```bash
+   npx drizzle-kit push
+   npx tsx --env-file=.env.local scripts/seed.ts
+   ```
+4. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+   Open http://localhost:3000.
 
-To learn more about Next.js, take a look at the following resources:
+## Deployment
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Deployed on Vercel. Set `DATABASE_URL` and `JWT_SECRET` as environment variables in the Vercel project settings, then redeploy.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Future scope
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Google OAuth and OTP or email verification
+- Doctor credential verification and approval
+- Ratings and reviews
+- Elastic scheduling (multiple appointments per slot, expandable hours)
+- Slot-utilisation analytics for doctors
+- Email and SMS alerts and scheduled reminders
