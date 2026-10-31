@@ -2,19 +2,23 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { appointments, doctors, rescheduleHistory, users } from "@/db/schema";
+import { appointments, doctors, payments, rescheduleHistory, users } from "@/db/schema";
 import { drName, fmtDate, notify } from "@/lib/notify";
+import type { CheckoutInfo } from "@/lib/payment-types";
+import { releaseExpiredHolds } from "@/lib/payments";
 import { getAvailableSlots } from "@/lib/queries";
+import { HOLD_MINUTES, getRazorpay } from "@/lib/razorpay";
 import { getSession } from "@/lib/session";
 import { bookSchema, rescheduleSchema } from "@/lib/validators";
 
 type Result = { ok: true } | { ok: false; error: string };
+type BookResult = { ok: true; checkout: CheckoutInfo | null } | { ok: false; error: string };
 
 const isUniqueViolation = (e: any) => (e?.code ?? e?.cause?.code) === "23505";
 
 async function getDoctorUser(doctorId: string) {
   const [row] = await db
-    .select({ userId: doctors.userId, name: users.name })
+    .select({ userId: doctors.userId, name: users.name, fee: doctors.fee })
     .from(doctors)
     .innerJoin(users, eq(users.id, doctors.userId))
     .where(eq(doctors.id, doctorId));
@@ -26,7 +30,7 @@ function revalidateAll() {
   revalidatePath("/doctor");
 }
 
-export async function bookAppointment(input: unknown): Promise<Result> {
+export async function bookAppointment(input: unknown): Promise<BookResult> {
   const session = await getSession();
   if (!session || session.role !== "patient") return { ok: false, error: "Please sign in as a patient to book" };
 
@@ -37,24 +41,67 @@ export async function bookAppointment(input: unknown): Promise<Result> {
   const doc = await getDoctorUser(doctorId);
   if (!doc) return { ok: false, error: "Doctor not found" };
 
+  await releaseExpiredHolds();
+
   const slots = await getAvailableSlots(doctorId, date);
   const slot = slots.find((s) => s.startTime === startTime);
   if (!slot) return { ok: false, error: "That slot is no longer available" };
 
+  const needsPayment = doc.fee > 0;
+
+  let appointmentId: string;
   try {
-    await db.insert(appointments).values({
-      doctorId, patientId: session.userId, date,
-      startTime: slot.startTime, endTime: slot.endTime, reason,
-    });
+    const [row] = await db
+      .insert(appointments)
+      .values({
+        doctorId, patientId: session.userId, date,
+        startTime: slot.startTime, endTime: slot.endTime, reason,
+        status: needsPayment ? "pending_payment" : "booked",
+        holdExpiresAt: needsPayment ? new Date(Date.now() + HOLD_MINUTES * 60_000) : null,
+      })
+      .returning({ id: appointments.id });
+    appointmentId = row.id;
   } catch (e) {
     if (isUniqueViolation(e)) return { ok: false, error: "Someone just booked this slot. Pick another." };
     return { ok: false, error: "Could not book appointment" };
   }
 
-  await notify(session.userId, `Your appointment with ${drName(doc.name)} on ${fmtDate(date)} at ${slot.startTime} is confirmed.`);
-  await notify(doc.userId, `New appointment: ${session.name} on ${fmtDate(date)} at ${slot.startTime}.`);
-  revalidateAll();
-  return { ok: true };
+  // Free consultation: confirm straight away
+  if (!needsPayment) {
+    await notify(session.userId, `Your appointment with ${drName(doc.name)} on ${fmtDate(date)} at ${slot.startTime} is confirmed.`);
+    await notify(doc.userId, `New appointment: ${session.name} on ${fmtDate(date)} at ${slot.startTime}.`);
+    revalidateAll();
+    return { ok: true, checkout: null };
+  }
+
+  // Paid consultation: create the order using the fee stored in the database
+  try {
+    const amountPaise = doc.fee * 100;
+    const { client, keyId } = getRazorpay();
+    const order = await client.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: appointmentId,
+      notes: { appointmentId },
+    });
+    await db.insert(payments).values({
+      appointmentId, providerOrderId: order.id, amountPaise, currency: "INR", status: "created",
+    });
+    const [me] = await db.select({ email: users.email }).from(users).where(eq(users.id, session.userId));
+    revalidateAll();
+    return {
+      ok: true,
+      checkout: {
+        keyId, orderId: order.id, amountPaise, currency: "INR",
+        doctorName: drName(doc.name), patientName: session.name, patientEmail: me?.email ?? "",
+      },
+    };
+  } catch (err) {
+    console.error("[payments] order creation failed:", err);
+    // Could not start payment: release the slot
+    await db.update(appointments).set({ status: "cancelled", holdExpiresAt: null }).where(eq(appointments.id, appointmentId));
+    return { ok: false, error: "Could not start the payment. Please try again." };
+  }
 }
 
 export async function rescheduleAppointment(input: unknown): Promise<Result> {
@@ -69,6 +116,7 @@ export async function rescheduleAppointment(input: unknown): Promise<Result> {
   if (!appt || appt.patientId !== session.userId) return { ok: false, error: "Appointment not found" };
   if (appt.status !== "booked") return { ok: false, error: "Only booked appointments can be rescheduled" };
 
+  await releaseExpiredHolds();
   const slot = (await getAvailableSlots(appt.doctorId, date)).find((s) => s.startTime === startTime);
   if (!slot) return { ok: false, error: "That slot is not available" };
 

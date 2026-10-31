@@ -109,7 +109,7 @@ export default async function DoctorPage({ params }: { params: Promise<{ id: str
             ) : session.role !== "patient" ? (
               <p className="text-sm text-muted-foreground">Doctor accounts cannot book appointments.</p>
             ) : (
-              <SlotPicker doctorId={doc.id} today={istNow().today} />
+              <SlotPicker doctorId={doc.id} today={istNow().today} fee={doc.fee} />
             )}
           </div>
         </aside>

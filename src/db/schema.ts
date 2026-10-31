@@ -1,11 +1,18 @@
 import { sql } from "drizzle-orm";
 import {
-  pgTable, pgEnum, uuid, text, integer, timestamp, date, uniqueIndex,
+  pgTable, pgEnum, uuid, text, integer, timestamp, date, uniqueIndex, index,
   boolean,
 } from "drizzle-orm/pg-core";
 
 export const roleEnum = pgEnum("role", ["patient", "doctor"]);
-export const statusEnum = pgEnum("appointment_status", ["booked", "cancelled", "completed"]);
+export const statusEnum = pgEnum("appointment_status", [
+  "booked", "cancelled", "completed", "pending_payment",
+]);
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "created", "pending", "paid", "failed", "abandoned", "refunded", "partially_refunded",
+]);
+export const refundStatusEnum = pgEnum("refund_status", ["pending", "processed", "failed"]);
+export const reminderStatusEnum = pgEnum("reminder_status", ["pending", "sent", "cancelled", "failed"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -55,13 +62,15 @@ export const appointments = pgTable(
     endTime: text("end_time").notNull(),
     status: statusEnum("status").default("booked").notNull(),
     reason: text("reason"),
+    // Set while status = 'pending_payment': the slot is held until this time
+    holdExpiresAt: timestamp("hold_expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
-    // Two active bookings can never share a doctor + date + slot
+    // Two active appointments (booked or awaiting payment) can never share a slot
     uniqueIndex("one_booking_per_slot")
       .on(t.doctorId, t.date, t.startTime)
-      .where(sql`${t.status} = 'booked'`),
+      .where(sql`${t.status} not in ('cancelled', 'completed')`),
   ]
 );
 
@@ -84,3 +93,66 @@ export const rescheduleHistory = pgTable("reschedule_history", {
   newStartTime: text("new_start_time").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// ---- Payments (amounts stored in paise: fee in rupees x 100) ----
+
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id").notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    provider: text("provider").default("razorpay").notNull(),
+    providerOrderId: text("provider_order_id").notNull().unique(),
+    providerPaymentId: text("provider_payment_id").unique(),
+    amountPaise: integer("amount_paise").notNull(),
+    currency: text("currency").default("INR").notNull(),
+    status: paymentStatusEnum("status").default("created").notNull(),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    paidAt: timestamp("paid_at"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [index("payments_appointment_idx").on(t.appointmentId)]
+);
+
+export const refunds = pgTable(
+  "refunds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    paymentId: uuid("payment_id").notNull()
+      .references(() => payments.id, { onDelete: "cascade" }),
+    amountPaise: integer("amount_paise").notNull(),
+    reason: text("reason").notNull(),
+    status: refundStatusEnum("status").default("pending").notNull(),
+    providerRefundId: text("provider_refund_id").unique(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+  },
+  (t) => [index("refunds_payment_idx").on(t.paymentId)]
+);
+
+// Gateway event ids we have already handled (makes webhooks idempotent)
+export const webhookEvents = pgTable("webhook_events", {
+  eventId: text("event_id").primaryKey(),
+  provider: text("provider").default("razorpay").notNull(),
+  type: text("type").notNull(),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+});
+
+export const reminders = pgTable(
+  "reminders",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id").notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // "24h" | "1h"
+    sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
+    status: reminderStatusEnum("status").default("pending").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("reminder_per_appointment_kind").on(t.appointmentId, t.kind),
+    index("reminders_due_idx").on(t.status, t.sendAt),
+  ]
+);

@@ -2,19 +2,61 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { bookAppointment, rescheduleAppointment } from "@/actions/appointments";
+import { abandonPayment, verifyPayment } from "@/actions/payments";
 import { fetchSlots } from "@/actions/slots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { prettyDate } from "@/lib/format";
+import type { CheckoutInfo } from "@/lib/payment-types";
 import { cn } from "@/lib/utils";
+
+declare global {
+  interface Window {
+    Razorpay?: any;
+  }
+}
 
 type Slot = { startTime: string; endTime: string };
 
+function loadRazorpay(): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  if (window.Razorpay) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+}
+
+// Resolves with "paid", "dismissed", or an error message
+function runCheckout(c: CheckoutInfo): Promise<string> {
+  return new Promise((resolve) => {
+    const rz = new window.Razorpay({
+      key: c.keyId,
+      amount: c.amountPaise,
+      currency: c.currency,
+      order_id: c.orderId,
+      name: "Medrella",
+      description: `Consultation with ${c.doctorName}`,
+      prefill: { name: c.patientName, email: c.patientEmail },
+      theme: { color: "#0E6B58" },
+      handler: async (r: any) => {
+        const v = await verifyPayment(r);
+        resolve(v.ok ? "paid" : v.error);
+      },
+      modal: { ondismiss: () => resolve("dismissed") },
+    });
+    rz.open();
+  });
+}
+
 export function SlotPicker({
-  doctorId, today, appointmentId,
-}: { doctorId: string; today: string; appointmentId?: string }) {
+  doctorId, today, appointmentId, fee,
+}: { doctorId: string; today: string; appointmentId?: string; fee?: number }) {
   const router = useRouter();
   const [date, setDate] = useState(today);
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -24,8 +66,10 @@ export function SlotPicker({
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [pending, startTransition] = useTransition();
+  const [paying, setPaying] = useState(false);
 
   const selectedSlot = slots.find((s) => s.startTime === selected) ?? null;
+  const busy = pending || paying;
 
   useEffect(() => {
     let cancelled = false;
@@ -37,22 +81,74 @@ export function SlotPicker({
     return () => { cancelled = true; };
   }, [doctorId, date, reloadKey]);
 
-  function confirm() {
-    if (!selected) return;
+  function refreshSlots() {
+    setReloadKey((k) => k + 1);
+  }
+
+  function reschedule() {
+    if (!selected || !appointmentId) return;
     setError(null);
     startTransition(async () => {
-      const res = appointmentId
-        ? await rescheduleAppointment({ appointmentId, date, startTime: selected })
-        : await bookAppointment({ doctorId, date, startTime: selected, reason: reason.trim() || undefined });
+      const res = await rescheduleAppointment({ appointmentId, date, startTime: selected });
       if (res.ok) {
         router.push("/patient");
         router.refresh();
       } else {
         setError(res.error);
-        setReloadKey((k) => k + 1); // refresh slots in case someone took one
+        refreshSlots();
       }
     });
   }
+
+  async function book() {
+    if (!selected) return;
+    setError(null);
+    setPaying(true);
+    try {
+      const res = await bookAppointment({ doctorId, date, startTime: selected, reason: reason.trim() || undefined });
+      if (!res.ok) {
+        setError(res.error);
+        refreshSlots();
+        return;
+      }
+      if (!res.checkout) {
+        router.push("/patient");
+        router.refresh();
+        return;
+      }
+
+      if (!(await loadRazorpay())) {
+        await abandonPayment(res.checkout.orderId);
+        setError("Could not load the payment window. Check your connection and try again.");
+        refreshSlots();
+        return;
+      }
+
+      const outcome = await runCheckout(res.checkout);
+      if (outcome === "paid") {
+        router.push("/patient");
+        router.refresh();
+      } else if (outcome === "dismissed") {
+        await abandonPayment(res.checkout.orderId);
+        setError("Payment was cancelled, so the slot has been released.");
+        refreshSlots();
+      } else {
+        // Verification failed on our side; the webhook may still confirm a real payment
+        setError("We could not confirm your payment yet. If money was deducted, the booking will appear in My appointments shortly.");
+      }
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  const confirm = appointmentId ? reschedule : book;
+  const label = busy
+    ? "Please wait..."
+    : appointmentId
+      ? "Confirm new time"
+      : fee && fee > 0
+        ? `Pay ₹${fee} and book`
+        : "Confirm booking";
 
   return (
     <div className="space-y-5">
@@ -135,15 +231,17 @@ export function SlotPicker({
 
       <Button
         onClick={confirm}
-        disabled={!selected || pending}
+        disabled={!selected || busy}
         className="w-full bg-[#0E6B58] text-white hover:bg-[#0B5646]"
       >
-        {pending
-          ? "Saving..."
-          : appointmentId
-            ? "Confirm new time"
-            : "Confirm booking"}
+        {label}
       </Button>
+
+      {!appointmentId && fee && fee > 0 ? (
+        <p className="text-center text-xs text-muted-foreground">
+          Your slot is held for 10 minutes while you pay.
+        </p>
+      ) : null}
     </div>
   );
 }

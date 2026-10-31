@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { appointments, availability, doctors, notifications, users } from "@/db/schema";
 import { generateSlots, istNow, toMin, weekdayOf } from "./slots";
@@ -64,7 +64,16 @@ export async function getAvailableSlots(doctorId: string, date: string) {
   const booked = await db
     .select({ startTime: appointments.startTime })
     .from(appointments)
-    .where(and(eq(appointments.doctorId, doctorId), eq(appointments.date, date), eq(appointments.status, "booked")));
+    .where(
+      and(
+        eq(appointments.doctorId, doctorId),
+        eq(appointments.date, date),
+        or(
+          eq(appointments.status, "booked"),
+          and(eq(appointments.status, "pending_payment"), gt(appointments.holdExpiresAt, sql`now()`))
+        )
+      )
+    );
   const taken = new Set(booked.map((b) => b.startTime));
 
   return generateSlots(av.startTime, av.endTime, av.slotMinutes).filter(
@@ -87,7 +96,7 @@ export async function getDoctorAppointments(doctorUserId: string) {
     .from(appointments)
     .innerJoin(doctors, eq(doctors.id, appointments.doctorId))
     .innerJoin(users, eq(users.id, appointments.patientId))
-    .where(eq(doctors.userId, doctorUserId))
+        .where(and(eq(doctors.userId, doctorUserId), ne(appointments.status, "pending_payment")))
     .orderBy(asc(appointments.date), asc(appointments.startTime));
 }
 
@@ -106,7 +115,12 @@ export async function getPatientAppointments(patientId: string) {
     .from(appointments)
     .innerJoin(doctors, eq(doctors.id, appointments.doctorId))
     .innerJoin(users, eq(users.id, doctors.userId))
-    .where(eq(appointments.patientId, patientId))
+    .where(
+      and(
+        eq(appointments.patientId, patientId),
+        or(ne(appointments.status, "pending_payment"), gt(appointments.holdExpiresAt, sql`now()`))
+      )
+    )
     .orderBy(asc(appointments.date), asc(appointments.startTime));
 }
 
