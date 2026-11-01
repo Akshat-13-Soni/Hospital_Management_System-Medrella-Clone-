@@ -1,6 +1,6 @@
-import { and, asc, count, desc, eq, gt, ilike, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { appointments, availability, doctors, notifications, users } from "@/db/schema";
+import { appointments, availability, doctors, notifications, payments, refunds, users } from "@/db/schema";
 import { generateSlots, istNow, toMin, weekdayOf } from "./slots";
 
 export async function listDoctors(q?: string) {
@@ -154,4 +154,49 @@ export async function getPatientAppointment(id: string, patientId: string) {
     .innerJoin(users, eq(users.id, doctors.userId))
     .where(and(eq(appointments.id, id), eq(appointments.patientId, patientId)));
   return row ?? null;
+}
+
+export async function getPatientPayments(patientId: string) {
+  const rows = await db
+    .select({
+      id: payments.id,
+      amountPaise: payments.amountPaise,
+      status: payments.status,
+      providerPaymentId: payments.providerPaymentId,
+      paidAt: payments.paidAt,
+      date: appointments.date,
+      startTime: appointments.startTime,
+      endTime: appointments.endTime,
+      doctorName: users.name,
+      specialization: doctors.specialization,
+    })
+    .from(payments)
+    .innerJoin(appointments, eq(appointments.id, payments.appointmentId))
+    .innerJoin(doctors, eq(doctors.id, appointments.doctorId))
+    .innerJoin(users, eq(users.id, doctors.userId))
+    .where(
+      and(
+        eq(appointments.patientId, patientId),
+        inArray(payments.status, ["paid", "refunded", "partially_refunded", "failed"])
+      )
+    )
+    .orderBy(desc(payments.createdAt));
+  if (rows.length === 0) return [];
+
+  const refundRows = await db
+    .select()
+    .from(refunds)
+    .where(inArray(refunds.paymentId, rows.map((r) => r.id)))
+    .orderBy(asc(refunds.createdAt));
+  return rows.map((r) => ({ ...r, refunds: refundRows.filter((x) => x.paymentId === r.id) }));
+}
+
+// appointmentId -> amount (paise) still paid and refundable
+export async function getPaidAmounts(patientId: string) {
+  const rows = await db
+    .select({ appointmentId: payments.appointmentId, amountPaise: payments.amountPaise })
+    .from(payments)
+    .innerJoin(appointments, eq(appointments.id, payments.appointmentId))
+    .where(and(eq(appointments.patientId, patientId), eq(payments.status, "paid")));
+  return new Map(rows.map((r) => [r.appointmentId, r.amountPaise]));
 }

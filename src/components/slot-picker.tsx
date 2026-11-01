@@ -239,7 +239,8 @@ export function SlotPicker({
 
       {!appointmentId && fee && fee > 0 ? (
         <p className="text-center text-xs text-muted-foreground">
-          Your slot is held for 10 minutes while you pay.
+          Your slot is held for 10 minutes while you pay. Cancellation: full refund more than 24 hrs before,
+          50% between 4 to 24 hrs, no refund under 4 hrs. See our <a href="/refund-policy" className="underline">refund policy</a> for details.
         </p>
       ) : null}
     </div>

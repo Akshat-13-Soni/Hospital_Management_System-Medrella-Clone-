@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { settleRefund } from "@/lib/refunds";
 import { webhookEvents } from "@/db/schema";
 import { markFailed, markPaid } from "@/lib/payments";
 import { verifyWebhookSignature } from "@/lib/razorpay";
@@ -22,6 +23,7 @@ export async function POST(req: Request) {
   }
 
   const payment = event?.payload?.payment?.entity;
+  const refund = event?.payload?.refund?.enitity;
   const eventId: string =
     req.headers.get("x-razorpay-event-id") ?? `${event?.event}:${payment?.id ?? event?.created_at}`;
 
@@ -37,8 +39,16 @@ export async function POST(req: Request) {
       case "payment.failed":
         if (payment?.order_id) await markFailed(payment.order_id, payment.error_description);
         break;
+      case "refund.processed":
+        if(refund?.id)
+          await settleRefund(refund.id, "processed", {providerPaymentId: refund.payment_id, amountPaise: refund.amount});
+        break;
+      case "refund.failed":
+        if(refund?.id)
+          await settleRefund(refund.id, "failed", {providerPaymentId: refund.payment_id, amountPaise: refund.amount});
+        break;
       default:
-        break; // other events are ignored for now
+        break;
     }
 
     // Recorded only after successful processing, so a failed attempt gets retried

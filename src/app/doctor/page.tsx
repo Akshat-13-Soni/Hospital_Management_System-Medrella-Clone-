@@ -10,6 +10,7 @@ import { requireRole } from "@/lib/auth-guard";
 import { DAYS, prettyDate } from "@/lib/format";
 import { getAvailability, getDoctorAppointments, getDoctorByUserId } from "@/lib/queries";
 import { istNow } from "@/lib/slots";
+import { CancelButton } from "@/components/cancel-button";
 
 export default async function DoctorDashboard() {
   const s = await requireRole("doctor");
@@ -80,9 +81,7 @@ export default async function DoctorDashboard() {
                 </Button>
               </form>
               <form action={cancelAppointment.bind(null, a.id)}>
-                <Button type="submit" variant="ghost" size="sm" className="text-red-600 hover:bg-red-50 hover:text-red-700">
-                  Cancel
-                </Button>
+                <CancelButton message="Cancel this appointment? If the patient has paid, they will be refunded in full." />
               </form>
             </div>
           </div>

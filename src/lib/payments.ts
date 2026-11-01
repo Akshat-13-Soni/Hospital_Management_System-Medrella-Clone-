@@ -1,7 +1,9 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { appointments, doctors, payments, users } from "@/db/schema";
+import { rupees } from "./money";
 import { drName, fmtDate, notify } from "./notify";
+import { issueRefund } from "./refunds";
 
 // Frees slots whose payment window ran out. Safe to call any time.
 export async function releaseExpiredHolds() {
@@ -30,12 +32,13 @@ export async function markPaid(orderId: string, paymentId: string) {
   const [p] = await db.select().from(payments).where(eq(payments.providerOrderId, orderId));
   if (!p) return { ok: false as const, reason: "unknown_order" };
 
-  await db
+  // Only the call that actually flips the payment to "paid" continues below
+  const [justPaid] = await db
     .update(payments)
     .set({ status: "paid", providerPaymentId: paymentId, paidAt: new Date(), updatedAt: new Date(), failureReason: null })
-    .where(
-      and(eq(payments.id, p.id), inArray(payments.status, ["created", "pending", "failed", "abandoned"]))
-    );
+    .where(and(eq(payments.id, p.id), inArray(payments.status, ["created", "pending", "failed", "abandoned"])))
+    .returning({ id: payments.id });
+  if (!justPaid) return { ok: true as const, confirmed: true };
 
   const [appt] = await db
     .update(appointments)
@@ -50,12 +53,26 @@ export async function markPaid(orderId: string, paymentId: string) {
     });
 
   if (!appt) {
-    // Already booked (duplicate event) or the hold was released before the money arrived.
-    const [current] = await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, p.appointmentId));
+    // Money arrived but the hold had already been released: refund in full automatically
+    const [current] = await db
+      .select({ status: appointments.status, patientId: appointments.patientId })
+      .from(appointments)
+      .where(eq(appointments.id, p.appointmentId));
     if (current && current.status !== "booked" && current.status !== "completed") {
-      await db.update(payments).set({ failureReason: "late_payment_needs_refund" }).where(eq(payments.id, p.id));
+      await db.update(payments).set({ failureReason: "late_payment_refunded" }).where(eq(payments.id, p.id));
+      const res = await issueRefund({
+        paymentId: p.id,
+        amountPaise: p.amountPaise,
+        reason: "Payment received after the booking hold expired",
+      });
+      await notify(
+        current.patientId,
+        res.ok
+          ? `Your payment of ${rupees(p.amountPaise)} arrived after the slot was released, so it is being refunded in full.`
+          : `Your payment of ${rupees(p.amountPaise)} arrived after the slot was released. Please contact support with payment ID ${paymentId}.`
+      );
     }
-    return { ok: true as const, confirmed: current?.status === "booked" };
+    return { ok: true as const, confirmed: false };
   }
 
   const [doc] = await db

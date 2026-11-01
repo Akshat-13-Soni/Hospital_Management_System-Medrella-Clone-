@@ -1,5 +1,8 @@
 "use server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { rupees } from "@/lib/money";
+import { refundFor } from "@/lib/refund-policy";
+import { issueRefund } from "@/lib/refunds";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { appointments, doctors, payments, rescheduleHistory, users } from "@/db/schema";
@@ -162,15 +165,48 @@ export async function cancelAppointment(id: string) {
   if (session.userId !== appt.patientId && session.userId !== appt.doctorUserId) throw new Error("Forbidden");
   if (appt.status !== "booked") return;
 
-  await db.update(appointments).set({ status: "cancelled" }).where(eq(appointments.id, id));
+  // Only one caller can win this update, so a refund can never start twice
+  const [cancelled] = await db
+    .update(appointments)
+    .set({ status: "cancelled" })
+    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
+    .returning({ id: appointments.id });
+  if (!cancelled) return;
 
+  const byDoctor = session.userId === appt.doctorUserId;
   const when = `${fmtDate(appt.date)} at ${appt.startTime}`;
-  if (session.userId === appt.doctorUserId) {
-    await notify(appt.patientId, `${drName(session.name)} cancelled your appointment on ${when}.`);
-  } else {
+  let patientMsg = byDoctor
+    ? `${drName(session.name)} cancelled your appointment on ${when}.`
+    : `You cancelled your appointment on ${when}.`;
+
+  const [pay] = await db
+    .select()
+    .from(payments)
+    .where(and(eq(payments.appointmentId, id), eq(payments.status, "paid")));
+
+  if (pay) {
+    const d = refundFor({
+      date: appt.date,
+      startTime: appt.startTime,
+      cancelledBy: byDoctor ? "doctor" : "patient",
+      amountPaise: pay.amountPaise,
+    });
+    if (d.amountPaise > 0) {
+      const res = await issueRefund({ paymentId: pay.id, amountPaise: d.amountPaise, reason: d.reason });
+      patientMsg += res.ok
+        ? ` A refund of ${rupees(d.amountPaise)} (${d.percent}%) has been initiated. It shows as processed in Payment history once confirmed.`
+        : ` We could not start your refund automatically. Please contact support with payment ID ${pay.providerPaymentId}.`;
+    } else {
+      patientMsg += " No refund applies under the cancellation policy.";
+    }
+  }
+
+  await notify(appt.patientId, patientMsg);
+  if (!byDoctor) {
     await notify(appt.doctorUserId, `${session.name} cancelled their appointment on ${when}. The slot is free again.`);
   }
   revalidateAll();
+  revalidatePath("/patient/payments");
 }
 
 export async function completeAppointment(id: string) {

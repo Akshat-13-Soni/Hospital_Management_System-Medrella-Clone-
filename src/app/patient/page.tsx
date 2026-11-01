@@ -1,18 +1,21 @@
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 import { cancelAppointment } from "@/actions/appointments";
+import { CancelButton } from "@/components/cancel-button";
 import { DateBlock } from "@/components/date-block";
 import { StatusBadge } from "@/components/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth-guard";
 import { prettyDate } from "@/lib/format";
-import { getPatientAppointments } from "@/lib/queries";
+import { rupees } from "@/lib/money";
+import { getPaidAmounts, getPatientAppointments } from "@/lib/queries";
+import { refundFor } from "@/lib/refund-policy";
 import { istNow } from "@/lib/slots";
 import { cn } from "@/lib/utils";
 
 export default async function PatientDashboard() {
   const s = await requireRole("patient");
-  const all = await getPatientAppointments(s.userId);
+  const [all, paid] = await Promise.all([getPatientAppointments(s.userId), getPaidAmounts(s.userId)]);
   const { today } = istNow();
 
   const isUpcoming = (a: (typeof all)[number]) => a.status === "booked" && a.date >= today;
@@ -27,6 +30,15 @@ export default async function PatientDashboard() {
     { label: "Cancelled", value: cancelled },
   ];
 
+  function cancelMessage(a: (typeof all)[number]) {
+    const amount = paid.get(a.id);
+    if (!amount) return "Cancel this appointment?";
+    const d = refundFor({ date: a.date, startTime: a.startTime, cancelledBy: "patient", amountPaise: amount });
+    return d.amountPaise > 0
+      ? `Cancel this appointment? You will get a refund of ${rupees(d.amountPaise)} (${d.percent}% of ${rupees(amount)}).`
+      : `Cancel this appointment? No refund applies because it is less than 2 hours away.`;
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -34,12 +46,17 @@ export default async function PatientDashboard() {
           <h1 className="text-2xl font-semibold tracking-tight text-[#10231F]">Hi, {s.name}</h1>
           <p className="text-sm text-muted-foreground">Here is what is coming up.</p>
         </div>
-        <Link
-          href="/doctors"
-          className={cn(buttonVariants(), "bg-[#0E6B58] text-white hover:bg-[#0B5646]")}
-        >
-          Book new appointment
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/patient/payments" className={buttonVariants({ variant: "outline" })}>
+            Payment history
+          </Link>
+          <Link
+            href="/doctors"
+            className={cn(buttonVariants(), "bg-[#0E6B58] text-white hover:bg-[#0B5646]")}
+          >
+            Book new appointment
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -78,10 +95,13 @@ export default async function PatientDashboard() {
             <div className="min-w-0 flex-1 text-sm">
               <p className="font-semibold text-[#10231F]">{a.doctorName}</p>
               <p className="text-muted-foreground">{a.specialization}</p>
-              <p className="text-muted-foreground">
-                {a.specialization} · {prettyDate(a.date)}, {a.startTime} to {a.endTime}
+              <p className="mt-1">
+                {prettyDate(a.date)}, {a.startTime} to {a.endTime}
               </p>
               {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
+              {paid.get(a.id) ? (
+                <p className="mt-1 text-xs font-medium text-[#0E6B58]">Paid {rupees(paid.get(a.id)!)}</p>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={a.status} />
@@ -92,9 +112,7 @@ export default async function PatientDashboard() {
                 Reschedule
               </Link>
               <form action={cancelAppointment.bind(null, a.id)}>
-                <Button type="submit" variant="ghost" size="sm" className="text-red-600 hover:bg-red-50 hover:text-red-700">
-                  Cancel
-                </Button>
+                <CancelButton message={cancelMessage(a)} />
               </form>
             </div>
           </div>
@@ -110,7 +128,7 @@ export default async function PatientDashboard() {
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-[#10231F]">{a.doctorName}</p>
                 <p className="text-muted-foreground">
-                  {a.specialization} · {prettyDate(a.date)}, {a.startTime}
+                  {a.specialization} · {prettyDate(a.date)}, {a.startTime} to {a.endTime}
                 </p>
               </div>
               <StatusBadge status={a.status} />
