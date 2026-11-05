@@ -1,9 +1,9 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { appointments, doctors, payments, users } from "@/db/schema";
-import { rupees } from "./money";
-import { drName, fmtDate, notify } from "./notify";
+import { appointments, payments } from "@/db/schema";
+import { onBookingConfirmed, onLatePaymentRefund } from "./events";
 import { issueRefund } from "./refunds";
+import { scheduleReminders } from "./reminders";
 
 // Frees slots whose payment window ran out. Safe to call any time.
 export async function releaseExpiredHolds() {
@@ -44,13 +44,7 @@ export async function markPaid(orderId: string, paymentId: string) {
     .update(appointments)
     .set({ status: "booked", holdExpiresAt: null })
     .where(and(eq(appointments.id, p.appointmentId), eq(appointments.status, "pending_payment")))
-    .returning({
-      id: appointments.id,
-      doctorId: appointments.doctorId,
-      patientId: appointments.patientId,
-      date: appointments.date,
-      startTime: appointments.startTime,
-    });
+    .returning({ id: appointments.id });
 
   if (!appt) {
     // Money arrived but the hold had already been released: refund in full automatically
@@ -65,27 +59,15 @@ export async function markPaid(orderId: string, paymentId: string) {
         amountPaise: p.amountPaise,
         reason: "Payment received after the booking hold expired",
       });
-      await notify(
-        current.patientId,
-        res.ok
-          ? `Your payment of ${rupees(p.amountPaise)} arrived after the slot was released, so it is being refunded in full.`
-          : `Your payment of ${rupees(p.amountPaise)} arrived after the slot was released. Please contact support with payment ID ${paymentId}.`
-      );
+      await onLatePaymentRefund({
+        userId: current.patientId, paymentId: p.id, amountPaise: p.amountPaise, ok: res.ok, paymentRef: paymentId,
+      });
     }
     return { ok: true as const, confirmed: false };
   }
 
-  const [doc] = await db
-    .select({ userId: doctors.userId, name: users.name })
-    .from(doctors)
-    .innerJoin(users, eq(users.id, doctors.userId))
-    .where(eq(doctors.id, appt.doctorId));
-  const [pat] = await db.select({ name: users.name }).from(users).where(eq(users.id, appt.patientId));
-
-  if (doc) {
-    await notify(appt.patientId, `Payment received. Your appointment with ${drName(doc.name)} on ${fmtDate(appt.date)} at ${appt.startTime} is confirmed.`);
-    await notify(doc.userId, `New appointment: ${pat?.name ?? "A patient"} on ${fmtDate(appt.date)} at ${appt.startTime}.`);
-  }
+  await scheduleReminders(appt.id);
+  await onBookingConfirmed(appt.id, { amountPaise: p.amountPaise });
   return { ok: true as const, confirmed: true };
 }
 

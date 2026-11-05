@@ -156,3 +156,57 @@ export const reminders = pgTable(
     index("reminders_due_idx").on(t.status, t.sendAt),
   ]
 );
+
+// ---- Notifications ----
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  phone: text("phone"),
+  emailEnabled: boolean("email_enabled").default(true).notNull(), // appointment emails
+  smsEnabled: boolean("sms_enabled").default(false).notNull(), // opt-in only
+  smsConsentAt: timestamp("sms_consent_at", { withTimezone: true }),
+  promoEmail: boolean("promo_email").default(false).notNull(), // optional, off by default
+  promoSms: boolean("promo_sms").default(false).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Every message we try to send, per channel: type, recipient, status, attempts, provider reference
+export const notificationLog = pgTable(
+  "notification_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    category: text("category").default("operational").notNull(), // operational | promotional
+    channel: text("channel").notNull(), // in_app | email | sms
+    recipient: text("recipient").notNull(),
+    subject: text("subject"),
+    body: text("body").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").default("pending").notNull(), // pending | sending | sent | failed | dead | skipped
+    attempts: integer("attempts").default(0).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    lastError: text("last_error"),
+    providerRef: text("provider_ref"),
+    payload: text("payload"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [
+    // The same event can never create the same message twice for the same person and channel
+    uniqueIndex("notification_idem").on(t.idempotencyKey, t.channel, t.userId),
+    index("notification_due").on(t.status, t.nextAttemptAt),
+  ]
+);
+
+// Days a doctor is on leave (used in Phase 2)
+export const doctorLeaves = pgTable(
+  "doctor_leaves",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+    date: date("date", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("doctor_leave_day").on(t.doctorId, t.date)]
+);

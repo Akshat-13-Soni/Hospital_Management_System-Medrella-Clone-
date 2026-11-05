@@ -1,16 +1,16 @@
 "use server";
-import { and, eq } from "drizzle-orm";
-import { rupees } from "@/lib/money";
-import { refundFor } from "@/lib/refund-policy";
-import { issueRefund } from "@/lib/refunds";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { appointments, doctors, payments, rescheduleHistory, users } from "@/db/schema";
-import { drName, fmtDate, notify } from "@/lib/notify";
+import { cancelBooked } from "@/lib/cancellation";
+import { onBookingConfirmed, onRescheduled } from "@/lib/events";
+import { drName } from "@/lib/notify";
 import type { CheckoutInfo } from "@/lib/payment-types";
 import { releaseExpiredHolds } from "@/lib/payments";
 import { getAvailableSlots } from "@/lib/queries";
 import { HOLD_MINUTES, getRazorpay } from "@/lib/razorpay";
+import { cancelReminders, rescheduleReminders, scheduleReminders } from "@/lib/reminders";
 import { getSession } from "@/lib/session";
 import { bookSchema, rescheduleSchema } from "@/lib/validators";
 
@@ -30,6 +30,7 @@ async function getDoctorUser(doctorId: string) {
 
 function revalidateAll() {
   revalidatePath("/patient");
+  revalidatePath("/patient/payments");
   revalidatePath("/doctor");
 }
 
@@ -71,8 +72,8 @@ export async function bookAppointment(input: unknown): Promise<BookResult> {
 
   // Free consultation: confirm straight away
   if (!needsPayment) {
-    await notify(session.userId, `Your appointment with ${drName(doc.name)} on ${fmtDate(date)} at ${slot.startTime} is confirmed.`);
-    await notify(doc.userId, `New appointment: ${session.name} on ${fmtDate(date)} at ${slot.startTime}.`);
+    await scheduleReminders(appointmentId);
+    await onBookingConfirmed(appointmentId);
     revalidateAll();
     return { ok: true, checkout: null };
   }
@@ -132,14 +133,12 @@ export async function rescheduleAppointment(input: unknown): Promise<Result> {
     return { ok: false, error: "Could not reschedule" };
   }
 
+  await rescheduleReminders(appointmentId); // old reminders are dropped, new ones follow the new time
   await db.insert(rescheduleHistory).values({
     appointmentId, oldDate: appt.date, oldStartTime: appt.startTime,
     newDate: date, newStartTime: slot.startTime,
   });
-
-  const doc = await getDoctorUser(appt.doctorId);
-  await notify(session.userId, `Your appointment with ${drName(doc!.name)} is now on ${fmtDate(date)} at ${slot.startTime}.`);
-  await notify(doc!.userId, `${session.name} rescheduled from ${fmtDate(appt.date)} ${appt.startTime} to ${fmtDate(date)} ${slot.startTime}.`);
+  await onRescheduled(appointmentId, { date: appt.date, startTime: appt.startTime });
   revalidateAll();
   return { ok: true };
 }
@@ -165,48 +164,11 @@ export async function cancelAppointment(id: string) {
   if (session.userId !== appt.patientId && session.userId !== appt.doctorUserId) throw new Error("Forbidden");
   if (appt.status !== "booked") return;
 
-  // Only one caller can win this update, so a refund can never start twice
-  const [cancelled] = await db
-    .update(appointments)
-    .set({ status: "cancelled" })
-    .where(and(eq(appointments.id, id), eq(appointments.status, "booked")))
-    .returning({ id: appointments.id });
-  if (!cancelled) return;
-
-  const byDoctor = session.userId === appt.doctorUserId;
-  const when = `${fmtDate(appt.date)} at ${appt.startTime}`;
-  let patientMsg = byDoctor
-    ? `${drName(session.name)} cancelled your appointment on ${when}.`
-    : `You cancelled your appointment on ${when}.`;
-
-  const [pay] = await db
-    .select()
-    .from(payments)
-    .where(and(eq(payments.appointmentId, id), eq(payments.status, "paid")));
-
-  if (pay) {
-    const d = refundFor({
-      date: appt.date,
-      startTime: appt.startTime,
-      cancelledBy: byDoctor ? "doctor" : "patient",
-      amountPaise: pay.amountPaise,
-    });
-    if (d.amountPaise > 0) {
-      const res = await issueRefund({ paymentId: pay.id, amountPaise: d.amountPaise, reason: d.reason });
-      patientMsg += res.ok
-        ? ` A refund of ${rupees(d.amountPaise)} (${d.percent}%) has been initiated. It shows as processed in Payment history once confirmed.`
-        : ` We could not start your refund automatically. Please contact support with payment ID ${pay.providerPaymentId}.`;
-    } else {
-      patientMsg += " No refund applies under the cancellation policy.";
-    }
-  }
-
-  await notify(appt.patientId, patientMsg);
-  if (!byDoctor) {
-    await notify(appt.doctorUserId, `${session.name} cancelled their appointment on ${when}. The slot is free again.`);
-  }
-  revalidateAll();
-  revalidatePath("/patient/payments");
+  const done = await cancelBooked({
+    appointmentId: id,
+    by: session.userId === appt.doctorUserId ? "doctor" : "patient",
+  });
+  if (done) revalidateAll();
 }
 
 export async function completeAppointment(id: string) {
@@ -214,5 +176,6 @@ export async function completeAppointment(id: string) {
   if (session.userId !== appt.doctorUserId) throw new Error("Forbidden");
   if (appt.status !== "booked") return;
   await db.update(appointments).set({ status: "completed" }).where(eq(appointments.id, id));
+  await cancelReminders(id); // completed appointments never get reminders
   revalidatePath("/doctor");
 }

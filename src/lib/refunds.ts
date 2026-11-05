@@ -4,6 +4,7 @@ import { appointments, payments, refunds } from "@/db/schema";
 import { rupees } from "./money";
 import { notify } from "./notify";
 import { getRazorpay } from "./razorpay";
+import { onRefundSettled } from "./events";
 
 type IssueResult = { ok: true; refundId: string } | { ok: false; error: string };
 
@@ -143,12 +144,17 @@ export async function settleRefund(
 
   if (status === "processed") {
     await syncPaymentStatus(p.id);
-    if (appt) await notify(appt.patientId, `Your refund of ${rupees(row.amountPaise)} has been processed.`);
-  } else if (appt) {
-    await notify(
-      appt.patientId,
-      `Your refund of ${rupees(row.amountPaise)} could not be completed. Please contact support with payment ID ${p.providerPaymentId}.`
-    );
+    if(appt)
+      await onRefundSettled({
+    userId: appt.patientId, refundId: row.id, status: "processed",
+  amountPaise: row.amountPaise, paymentRef: p.providerPaymentId,
+});
+  }
+  else if(appt){
+    await onRefundSettled({
+      userId: appt.patientId, refundId: row.id, status: "failed",
+      amountPaise: row.amountPaise, paymentRef: p.providerPaymentId,
+    });
   }
 }
 

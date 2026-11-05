@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth-guard";
 import { getNotifications } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 
 export default async function NotificationsPage() {
   const s = await requireUser();
@@ -13,7 +14,12 @@ export default async function NotificationsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight text-[#10231F]">Notifications</h1>
+                <div>
+                  <h1 className="text-2xl font-semibold tracking-tight text-[#10231F]">Notifications</h1>
+                  <Link href="/settings/notifications" className="text-sm text-[#0E6B58] hover:underline">
+                    Notification settings
+                  </Link>
+                </div>
         {hasUnread && (
           <form action={markAllRead}>
             <Button type="submit" variant="outline" size="sm">Mark all as read</Button>
