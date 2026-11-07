@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, gt, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { appointments, availability, doctors, notifications, payments, refunds, users } from "@/db/schema";
+import { appointments, availability, doctorLeaves, doctors, notifications, payments, refunds, users } from "@/db/schema";
 import { generateSlots, istNow, toMin, weekdayOf } from "./slots";
 
 export async function listDoctors(q?: string) {
@@ -54,6 +54,13 @@ export async function getAvailability(doctorId: string) {
 export async function getAvailableSlots(doctorId: string, date: string) {
   const { today, nowMin } = istNow();
   if (date < today) return [];
+  //Doctor is on leave that day, so no slots
+  const[leave] = await db
+    .select({id: doctorLeaves.id})
+    .from(doctorLeaves)
+    .where(and(eq(doctorLeaves.doctorId, doctorId), eq(doctorLeaves.date, date)))
+    .limit(1);
+  if(leave) return[];
 
   const [av] = await db
     .select()

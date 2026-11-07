@@ -1,5 +1,5 @@
 import { cancelAppointment, completeAppointment } from "@/actions/appointments";
-import { removeAvailability } from "@/actions/doctor";
+import { addLeave, removeAvailability, removeLeave } from "@/actions/doctor";
 import { AvailabilityForm } from "@/components/availability-form";
 import { DateBlock } from "@/components/date-block";
 import { DoctorAvatar } from "@/components/doctor-avatar";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth-guard";
 import { DAYS, prettyDate } from "@/lib/format";
 import { getAvailability, getDoctorAppointments, getDoctorByUserId } from "@/lib/queries";
+import { listLeaveDays } from "@/lib/leave";
 import { istNow } from "@/lib/slots";
 import { CancelButton } from "@/components/cancel-button";
 
@@ -17,7 +18,12 @@ export default async function DoctorDashboard() {
   const doc = await getDoctorByUserId(s.userId);
   if (!doc) return <p>Doctor profile not found.</p>;
 
-  const [appts, avail] = await Promise.all([getDoctorAppointments(s.userId), getAvailability(doc.id)]);
+  const [appts, avail, leaveDays] = await Promise.all([
+    getDoctorAppointments(s.userId),
+    getAvailability(doc.id),
+    listLeaveDays(doc.id),
+  ]);
+
   const { today } = istNow();
 
   const isUpcoming = (a: (typeof appts)[number]) => a.status === "booked" && a.date >= today;
@@ -124,6 +130,36 @@ export default async function DoctorDashboard() {
           </ul>
         )}
         <AvailabilityForm />
+      </section>
+      
+            <section className="space-y-4 rounded-2xl border bg-card p-6">
+        <h2 className="font-semibold text-[#10231F]">Days off</h2>
+        <p className="text-sm text-muted-foreground">
+          Marking a day off cancels every booked appointment on that day. Paid patients are refunded in full and
+          notified.
+        </p>
+        {leaveDays.length > 0 && (
+          <ul className="space-y-2 text-sm">
+            {leaveDays.map((d) => (
+              <li key={d} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                <span className="font-medium">{prettyDate(d)}</span>
+                <form action={removeLeave.bind(null, d)}>
+                  <Button type="submit" variant="ghost" size="sm">Remove</Button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form action={addLeave} className="flex flex-wrap items-center gap-3">
+          <input
+            type="date"
+            name="date"
+            min={today}
+            required
+            className="rounded-md border bg-background px-3 py-2 text-sm"
+          />
+          <Button type="submit" className="bg-[#0E6B58] text-white hover:bg-[#0B5646]">Mark day off</Button>
+        </form>
       </section>
 
       <section className="space-y-4 rounded-2xl border bg-card p-6">
