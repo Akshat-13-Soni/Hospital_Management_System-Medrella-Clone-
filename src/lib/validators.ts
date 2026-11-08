@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toMin } from "./slots";
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM");
 
@@ -51,3 +52,22 @@ export const rescheduleSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   startTime: hhmm,
 });
+
+export const scheduleSchema = z
+  .object({
+    type: z.enum(["wave", "stream"]),
+    recurrence: z.enum(["weekly", "date"]),
+    dayOfWeek: z.coerce.number().int().min(0).max(6).optional(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date").optional(),
+    startTime: hhmm,
+    endTime: hhmm,
+    slotMinutes: z.coerce.number().int().refine((v) => [15, 20, 30, 45, 60].includes(v), "Invalid slot length").optional(),
+    capacity: z.coerce.number().int().min(1, "At least 1").max(50, "At most 50"),
+  })
+  .refine((d) => d.startTime < d.endTime, { message: "End must be after start", path: ["endTime"] })
+  .refine((d) => d.recurrence !== "weekly" || d.dayOfWeek !== undefined, { message: "Choose a day", path: ["dayOfWeek"] })
+  .refine((d) => d.recurrence !== "date" || !!d.date, { message: "Pick a date", path: ["date"] })
+  .refine(
+    (d) => d.type !== "wave" || (d.slotMinutes !== undefined && toMin(d.endTime) - toMin(d.startTime) >= d.slotMinutes),
+    { message: "The window must fit at least one slot", path: ["slotMinutes"] }
+  );

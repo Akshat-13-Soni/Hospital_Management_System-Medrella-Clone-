@@ -18,7 +18,7 @@ declare global {
   }
 }
 
-type Slot = { startTime: string; endTime: string };
+type Slot = { startTime: string; endTime: string; capacity?: number; seatsLeft?: number };
 
 function loadRazorpay(): Promise<boolean> {
   if (typeof window === "undefined") return Promise.resolve(false);
@@ -188,6 +188,7 @@ export function SlotPicker({
                   )}
                 >
                   {s.startTime} – {s.endTime}
+                  {(s.capacity ?? 1) > 1 && <span className="ml-1 text-xs opacity-80">· {s.seatsLeft} left</span>}
                 </button>
               );
             })}
