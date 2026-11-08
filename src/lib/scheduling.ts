@@ -18,11 +18,28 @@ export function slotsFor(w: ScheduleWindow) {
   return generateSlots(w.startTime, w.endTime, w.slotMinutes);
 }
 
-// taken: start time -> number of active appointments already holding a seat
-export function openSlots(w: ScheduleWindow, taken: Map<string, number>, isToday: boolean, nowMin: number): OpenSlot[] {
+const overlaps = (aStart: string, aEnd: string, bStart: string, bEnd: string) =>
+  toMin(aStart) < toMin(bEnd) && toMin(bStart) < toMin(aEnd);
+
+// busy: every active appointment that day. Same-start bookings are handled by the seat count,
+// but a booking that starts at a different time and overlaps a wave slot blocks that slot.
+// A stream holds many patients across its window, so overlaps are expected there.
+export function openSlots(
+  w: ScheduleWindow,
+  busy: { startTime: string; endTime: string }[],
+  isToday: boolean,
+  nowMin: number
+): OpenSlot[] {
+  const taken = new Map<string, number>();
+  for (const b of busy) taken.set(b.startTime, (taken.get(b.startTime) ?? 0) + 1);
+
   return slotsFor(w)
     .map((s) => ({ ...s, capacity: w.capacity, seatsLeft: w.capacity - (taken.get(s.startTime) ?? 0) }))
     .filter((s) => s.seatsLeft > 0)
-    // a wave slot is gone once it starts; a stream stays open until its window ends
+    .filter(
+      (s) =>
+        w.type === "stream" ||
+        !busy.some((b) => b.startTime !== s.startTime && overlaps(s.startTime, s.endTime, b.startTime, b.endTime))
+    )
     .filter((s) => !isToday || (w.type === "stream" ? toMin(s.endTime) > nowMin : toMin(s.startTime) > nowMin));
 }
