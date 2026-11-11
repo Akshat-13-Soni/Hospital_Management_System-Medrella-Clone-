@@ -54,22 +54,30 @@ export async function bookAppointment(input: unknown): Promise<BookResult> {
 
   const needsPayment = doc.fee > 0;
 
-  let appointmentId: string;
-  try {
-    const [row] = await db
-      .insert(appointments)
-      .values({
-        doctorId, patientId: session.userId, date,
-        startTime: slot.startTime, endTime: slot.endTime, reason,
-        status: needsPayment ? "pending_payment" : "booked",
-        holdExpiresAt: needsPayment ? new Date(Date.now() + HOLD_MINUTES * 60_000) : null,
-      })
-      .returning({ id: appointments.id });
-    appointmentId = row.id;
-  } catch (e) {
-    if (isUniqueViolation(e)) return { ok: false, error: "Someone just booked this slot. Pick another." };
-    return { ok: false, error: "Could not book appointment" };
+    // Take the first free seat. The unique index rejects a seat that is already held, so two
+  // people can never get the same seat, even without transactions.
+  let bookedId: string | null = null;
+  for (let seat = 1; seat <= slot.capacity && !bookedId; seat++) {
+    try {
+      const [row] = await db
+        .insert(appointments)
+        .values({
+          doctorId, patientId: session.userId, date,
+          startTime: slot.startTime, endTime: slot.endTime, reason, seatNo: seat,
+          status: needsPayment ? "pending_payment" : "booked",
+          holdExpiresAt: needsPayment ? new Date(Date.now() + HOLD_MINUTES * 60_000) : null,
+        })
+        .returning({ id: appointments.id });
+      bookedId = row.id;
+    } catch (e) {
+      if (isUniqueViolation(e)) continue; // seat taken, try the next one
+      return { ok: false, error: "Could not book appointment" };
+    }
   }
+  if (!bookedId) {
+    return { ok: false, error: slot.capacity > 1 ? "That slot just filled up. Pick another." : "Someone just booked this slot. Pick another." };
+  }
+  const appointmentId = bookedId;
 
   // Free consultation: confirm straight away
   if (!needsPayment) {
@@ -126,14 +134,19 @@ export async function rescheduleAppointment(input: unknown): Promise<Result> {
   const slot = (await getAvailableSlots(appt.doctorId, date)).find((s) => s.startTime === startTime);
   if (!slot) return { ok: false, error: "That slot is not available" };
 
-  try {
-    await db.update(appointments)
-      .set({ date, startTime: slot.startTime, endTime: slot.endTime })
-      .where(eq(appointments.id, appointmentId));
-  } catch (e) {
-    if (isUniqueViolation(e)) return { ok: false, error: "Someone just booked this slot. Pick another." };
-    return { ok: false, error: "Could not reschedule" };
+    let moved = false;
+  for (let seat = 1; seat <= slot.capacity && !moved; seat++) {
+    try {
+      await db.update(appointments)
+        .set({ date, startTime: slot.startTime, endTime: slot.endTime, seatNo: seat })
+        .where(eq(appointments.id, appointmentId));
+      moved = true;
+    } catch (e) {
+      if (isUniqueViolation(e)) continue;
+      return { ok: false, error: "Could not reschedule" };
+    }
   }
+  if (!moved) return { ok: false, error: "That slot just filled up. Pick another." };
 
   await rescheduleReminders(appointmentId); // old reminders are dropped, new ones follow the new time
   await db.insert(rescheduleHistory).values({

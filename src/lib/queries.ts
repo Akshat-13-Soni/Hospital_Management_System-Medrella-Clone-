@@ -1,7 +1,8 @@
 import { and, asc, count, desc, eq, gt, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { appointments, availability, doctorLeaves, doctors, notifications, payments, refunds, users } from "@/db/schema";
-import { generateSlots, istNow, toMin, weekdayOf } from "./slots";
+import { appointments, availability, doctorLeaves, doctors, notifications, payments, refunds, schedules, users} from "@/db/schema";
+import { openSlots, type ScheduleWindow } from "./scheduling";
+import {istNow, weekdayOf } from "./slots";
 
 export async function listDoctors(q?: string) {
   const base = db
@@ -51,25 +52,45 @@ export async function getAvailability(doctorId: string) {
   return db.select().from(availability).where(eq(availability.doctorId, doctorId)).orderBy(asc(availability.dayOfWeek));
 }
 
-export async function getAvailableSlots(doctorId: string, date: string) {
-  const { today, nowMin } = istNow();
-  if (date < today) return [];
-  //Doctor is on leave that day, so no slots
-  const[leave] = await db
-    .select({id: doctorLeaves.id})
-    .from(doctorLeaves)
-    .where(and(eq(doctorLeaves.doctorId, doctorId), eq(doctorLeaves.date, date)))
-    .limit(1);
-  if(leave) return[];
-
+// Which schedule applies on a date: a one-off date, else the weekly schedule, else plain availability
+async function resolveWindow(doctorId: string, date: string): Promise<ScheduleWindow | null> {
+  const rows = await db
+    .select()
+    .from(schedules)
+    .where(and(eq(schedules.doctorId, doctorId), or(eq(schedules.date, date), eq(schedules.dayOfWeek, weekdayOf(date)))));
+  const s = rows.find((r) => r.date === date) ?? rows[0];
+  if (s) {
+    return {
+      type: s.type === "stream" ? "stream" : "wave",
+      startTime: s.startTime, endTime: s.endTime, slotMinutes: s.slotMinutes ?? 30, capacity: s.capacity,
+    };
+  }
   const [av] = await db
     .select()
     .from(availability)
     .where(and(eq(availability.doctorId, doctorId), eq(availability.dayOfWeek, weekdayOf(date))));
-  if (!av) return [];
+  if (!av) return null;
+  return { type: "wave", startTime: av.startTime, endTime: av.endTime, slotMinutes: av.slotMinutes, capacity: 1 };
+}
 
-  const booked = await db
-    .select({ startTime: appointments.startTime })
+export async function getAvailableSlots(doctorId: string, date: string) {
+  const { today, nowMin } = istNow();
+  if (date < today) return [];
+
+  // Doctor is on leave that day: no slots
+  const [leave] = await db
+    .select({ id: doctorLeaves.id })
+    .from(doctorLeaves)
+    .where(and(eq(doctorLeaves.doctorId, doctorId), eq(doctorLeaves.date, date)))
+    .limit(1);
+  if (leave) return [];
+
+  const window = await resolveWindow(doctorId, date);
+  if (!window) return [];
+
+  // Seats already held per slot: booked, or an unpaid hold that has not expired
+  const rows = await db
+    .select({ startTime: appointments.startTime, n: count() })
     .from(appointments)
     .where(
       and(
@@ -80,12 +101,15 @@ export async function getAvailableSlots(doctorId: string, date: string) {
           and(eq(appointments.status, "pending_payment"), gt(appointments.holdExpiresAt, sql`now()`))
         )
       )
-    );
-  const taken = new Set(booked.map((b) => b.startTime));
+    )
+    .groupBy(appointments.startTime);
+  const taken = new Map(rows.map((r) => [r.startTime, Number(r.n)]));
 
-  return generateSlots(av.startTime, av.endTime, av.slotMinutes).filter(
-    (s) => !taken.has(s.startTime) && (date > today || toMin(s.startTime) > nowMin)
-  );
+  return openSlots(window, taken, date === today, nowMin);
+}
+
+export async function getSchedules(doctorId: string) {
+  return db.select().from(schedules).where(eq(schedules.doctorId, doctorId)).orderBy(asc(schedules.dayOfWeek), asc(schedules.date));
 }
 
 export async function getDoctorAppointments(doctorUserId: string) {

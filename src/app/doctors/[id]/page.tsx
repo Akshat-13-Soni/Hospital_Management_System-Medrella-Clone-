@@ -5,8 +5,8 @@ import { DoctorAvatar } from "@/components/doctor-avatar";
 import { SlotPicker } from "@/components/slot-picker";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { SHORT_DAYS } from "@/lib/format";
-import { getAvailability, getDoctor } from "@/lib/queries";
+import { DAYS, SHORT_DAYS } from "@/lib/format";
+import { getAvailability, getDoctor, getSchedules } from "@/lib/queries";
 import { getSession } from "@/lib/session";
 import { istNow } from "@/lib/slots";
 import { cn } from "@/lib/utils";
@@ -17,8 +17,7 @@ export default async function DoctorPage({ params }: { params: Promise<{ id: str
 
   const doc = await getDoctor(id);
   if (!doc) notFound();
-  const [avail, session] = await Promise.all([getAvailability(id), getSession()]);
-
+const [avail, scheds, session] = await Promise.all([getAvailability(id), getSchedules(id), getSession()]);
   return (
     <div className="space-y-4">
       <Link href="/doctors" className="text-sm text-muted-foreground hover:text-foreground">
@@ -75,6 +74,18 @@ export default async function DoctorPage({ params }: { params: Promise<{ id: str
                     <span className="font-medium">{SHORT_DAYS[a.dayOfWeek]}</span>
                     <span className="text-muted-foreground">
                       {a.startTime} to {a.endTime} · {a.slotMinutes}-min slots
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {scheds.length > 0 && (
+              <ul className="mt-3 divide-y border-t pt-2 text-sm">
+                {scheds.map((x) => (
+                  <li key={x.id} className="flex items-center justify-between py-2">
+                    <span className="font-medium capitalize">{x.type}: {x.date ?? `Every ${DAYS[x.dayOfWeek ?? 0]}`}</span>
+                    <span className="text-muted-foreground">
+                      {x.startTime} to {x.endTime} · {x.type === "wave" ? `${x.capacity} per slot` : `${x.capacity} total`}
                     </span>
                   </li>
                 ))}

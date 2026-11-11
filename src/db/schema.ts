@@ -64,12 +64,14 @@ export const appointments = pgTable(
     reason: text("reason"),
     // Set while status = 'pending_payment': the slot is held until this time
     holdExpiresAt: timestamp("hold_expires_at", { withTimezone: true }),
+    //Which seat of the slot this booking holds (1 to capacity)
+    seatNo: integer("seat_no").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
-    // Two active appointments (booked or awaiting payment) can never share a slot
-    uniqueIndex("one_booking_per_slot")
-      .on(t.doctorId, t.date, t.startTime)
+    //A seat in a slot can only be held by one active appointment. This is the capcity lock.
+    uniqueIndex("one_booking_per_seat")
+      .on(t.doctorId, t.date, t.startTime, t.seatNo)
       .where(sql`${t.status} not in ('cancelled', 'completed')`),
   ]
 );
@@ -209,4 +211,26 @@ export const doctorLeaves = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [uniqueIndex("doctor_leave_day").on(t.doctorId, t.date)]
+);
+
+// Wave and stream schedules. Exactly one of dayOfWeek (recurring weekly) or date (one-off) is set.
+// A one-off date beats the weekly schedule, which beats the plain availability table.
+export const schedules = pgTable(
+  "schedules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+    type: text("type").notNull(), // "wave" | "stream"
+    dayOfWeek: integer("day_of_week"),
+    date: date("date", { mode: "string" }),
+    startTime: text("start_time").notNull(),
+    endTime: text("end_time").notNull(),
+    slotMinutes: integer("slot_minutes"), // wave only
+    capacity: integer("capacity").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("schedules_weekly").on(t.doctorId, t.dayOfWeek).where(sql`${t.dayOfWeek} is not null`),
+    uniqueIndex("schedules_one_date").on(t.doctorId, t.date).where(sql`${t.date} is not null`),
+  ]
 );
