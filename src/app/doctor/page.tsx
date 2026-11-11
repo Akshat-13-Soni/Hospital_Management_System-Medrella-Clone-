@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth-guard";
 import { DAYS, prettyDate } from "@/lib/format";
-import { getAvailability, getDoctorAppointments, getDoctorByUserId, getSchedules } from "@/lib/queries";
+import { getAvailability, getDoctorAppointments, getDoctorByUserId, getSchedules, getOutsideHours } from "@/lib/queries";
 import { ScheduleForm } from "@/components/schedule-form";
 import { listLeaveDays } from "@/lib/leave";
 import { istNow } from "@/lib/slots";
@@ -19,11 +19,12 @@ export default async function DoctorDashboard() {
   const doc = await getDoctorByUserId(s.userId);
   if (!doc) return <p>Doctor profile not found.</p>;
 
-    const [appts, avail, leaveDays, scheds] = await Promise.all([
+  const [appts, avail, leaveDays, scheds, outside] = await Promise.all([
     getDoctorAppointments(s.userId),
     getAvailability(doc.id),
     listLeaveDays(doc.id),
     getSchedules(doc.id),
+    getOutsideHours(doc.id),
   ]);
 
   const { today } = istNow();
@@ -61,7 +62,19 @@ export default async function DoctorDashboard() {
           You have no working hours set, so patients cannot book yet. Add them in the availability section below.
         </div>
       )}
-
+            {outside.length > 0 && (
+        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">
+            {outside.length} booked appointment{outside.length > 1 ? "s are" : " is"} outside your current working hours.
+          </p>
+          <p className="mt-1">They are still booked and nothing was cancelled. Patients can still attend or reschedule.</p>
+          <ul className="mt-2 list-disc pl-5">
+            {outside.map((a) => (
+              <li key={a.id}>{a.patientName}: {prettyDate(a.date)}, {a.startTime} to {a.endTime}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <section className="space-y-3">
         <h2 className="font-semibold text-[#10231F]">Upcoming appointments</h2>
         {upcoming.length === 0 && (

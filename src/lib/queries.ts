@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, ilike, inArray, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { appointments, availability, doctorLeaves, doctors, notifications, payments, refunds, schedules, users} from "@/db/schema";
 import { openSlots, type ScheduleWindow } from "./scheduling";
@@ -53,7 +53,7 @@ export async function getAvailability(doctorId: string) {
 }
 
 // Which schedule applies on a date: a one-off date, else the weekly schedule, else plain availability
-async function resolveWindow(doctorId: string, date: string): Promise<ScheduleWindow | null> {
+export async function resolveWindow(doctorId: string, date: string): Promise<ScheduleWindow | null> {
   const rows = await db
     .select()
     .from(schedules)
@@ -88,9 +88,9 @@ export async function getAvailableSlots(doctorId: string, date: string) {
   const window = await resolveWindow(doctorId, date);
   if (!window) return [];
 
-  // Seats already held per slot: booked, or an unpaid hold that has not expired
-  const rows = await db
-    .select({ startTime: appointments.startTime, n: count() })
+    // Every active appointment that day: booked, or an unpaid hold that has not expired
+  const busy = await db
+    .select({ startTime: appointments.startTime, endTime: appointments.endTime })
     .from(appointments)
     .where(
       and(
@@ -101,11 +101,9 @@ export async function getAvailableSlots(doctorId: string, date: string) {
           and(eq(appointments.status, "pending_payment"), gt(appointments.holdExpiresAt, sql`now()`))
         )
       )
-    )
-    .groupBy(appointments.startTime);
-  const taken = new Map(rows.map((r) => [r.startTime, Number(r.n)]));
+    );
 
-  return openSlots(window, taken, date === today, nowMin);
+  return openSlots(window, busy, date === today, nowMin);
 }
 
 export async function getSchedules(doctorId: string) {
@@ -231,3 +229,28 @@ export async function getPaidAmounts(patientId: string) {
     .where(and(eq(appointments.patientId, patientId), eq(payments.status, "paid")));
   return new Map(rows.map((r) => [r.appointmentId, r.amountPaise]));
 }
+
+// Upcoming booked appointments that now fall outside the doctor's current hours
+// (for example after the schedule was shrunk). They stay booked; this only reports them.
+export async function getOutsideHours(doctorId: string) {
+  const { today } = istNow();
+  const appts = await db
+    .select({
+      id: appointments.id, date: appointments.date,
+      startTime: appointments.startTime, endTime: appointments.endTime, patientName: users.name,
+    })
+    .from(appointments)
+    .innerJoin(users, eq(users.id, appointments.patientId))
+    .where(and(eq(appointments.doctorId, doctorId), eq(appointments.status, "booked"), gte(appointments.date, today)))
+    .orderBy(asc(appointments.date), asc(appointments.startTime));
+
+  const windows = new Map<string, ScheduleWindow | null>();
+  const out: typeof appts = [];
+  for (const a of appts) {
+    if (!windows.has(a.date)) windows.set(a.date, await resolveWindow(doctorId, a.date));
+    const w = windows.get(a.date);
+    if (!w || a.startTime < w.startTime || a.endTime > w.endTime) out.push(a);
+  }
+  return out;
+}
+
