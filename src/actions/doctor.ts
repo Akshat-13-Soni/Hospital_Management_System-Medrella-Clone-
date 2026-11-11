@@ -6,6 +6,7 @@ import { availability, doctors } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import { availabilitySchema, profileSchema } from "@/lib/validators";
 import type { ActionState } from "./auth";
+import { addLeaveDay, removeLeaveDay } from "@/lib/leave";
 
 async function requireDoctor() {
   const s = await getSession();
@@ -47,5 +48,18 @@ export async function saveAvailability(_: ActionState, formData: FormData): Prom
 export async function removeAvailability(dayOfWeek: number) {
   const doc = await requireDoctor();
   await db.delete(availability).where(and(eq(availability.doctorId, doc.id), eq(availability.dayOfWeek, dayOfWeek)));
+  revalidatePath("/doctor");
+}
+
+export async function addLeave(formData: FormData){
+  const doc = await requireDoctor();
+  await addLeaveDay(doc.id, String(formData.get("date") ?? ""));
+  revalidatePath("/doctor");
+  revalidatePath("/patient");
+}
+
+export async function removeLeave(date: string){
+  const doc = await requireDoctor();
+  await removeLeaveDay(doc.id, date);
   revalidatePath("/doctor");
 }

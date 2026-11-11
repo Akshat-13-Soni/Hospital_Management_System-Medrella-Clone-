@@ -13,6 +13,7 @@ import { HOLD_MINUTES, getRazorpay } from "@/lib/razorpay";
 import { cancelReminders, rescheduleReminders, scheduleReminders } from "@/lib/reminders";
 import { getSession } from "@/lib/session";
 import { bookSchema, rescheduleSchema } from "@/lib/validators";
+import { isOnLeave } from "@/lib/leave";
 
 type Result = { ok: true } | { ok: false; error: string };
 type BookResult = { ok: true; checkout: CheckoutInfo | null } | { ok: false; error: string };
@@ -46,7 +47,7 @@ export async function bookAppointment(input: unknown): Promise<BookResult> {
   if (!doc) return { ok: false, error: "Doctor not found" };
 
   await releaseExpiredHolds();
-
+  if(await isOnLeave(doctorId, date)) return{ ok:false, error:"The Doctor is on leave that day. Please pick another day."};
   const slots = await getAvailableSlots(doctorId, date);
   const slot = slots.find((s) => s.startTime === startTime);
   if (!slot) return { ok: false, error: "That slot is no longer available" };
@@ -121,6 +122,7 @@ export async function rescheduleAppointment(input: unknown): Promise<Result> {
   if (appt.status !== "booked") return { ok: false, error: "Only booked appointments can be rescheduled" };
 
   await releaseExpiredHolds();
+    if (await isOnLeave(appt.doctorId, date)) return { ok: false, error: "The doctor is on leave that day. Pick another date." };
   const slot = (await getAvailableSlots(appt.doctorId, date)).find((s) => s.startTime === startTime);
   if (!slot) return { ok: false, error: "That slot is not available" };
 
