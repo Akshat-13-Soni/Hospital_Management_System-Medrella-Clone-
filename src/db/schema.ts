@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
-  pgTable, pgEnum, uuid, text, integer, timestamp, date, uniqueIndex, index,
+  pgTable, pgEnum, uuid, text, jsonb, integer, timestamp, date, uniqueIndex, index,
   boolean,
 } from "drizzle-orm/pg-core";
 
@@ -233,4 +233,21 @@ export const schedules = pgTable(
     uniqueIndex("schedules_weekly").on(t.doctorId, t.dayOfWeek).where(sql`${t.dayOfWeek} is not null`),
     uniqueIndex("schedules_one_date").on(t.doctorId, t.date).where(sql`${t.date} is not null`),
   ]
+);
+
+// Write actions proposed by the AI assistant. Nothing runs until the user confirms.
+export const assistantActions = pgTable(
+  "assistant_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    tool: text("tool").notNull(),
+    args: jsonb("args").notNull(),
+    summary: text("summary").notNull(),
+    status: text("status").default("pending").notNull(), // pending | confirmed | cancelled | expired | failed
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    result: text("result"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("assistant_actions_user").on(t.userId, t.status)]
 );
