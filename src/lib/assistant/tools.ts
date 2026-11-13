@@ -29,6 +29,7 @@ const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM");
 const uuid = z.string().uuid();
 const params = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required });
 const str = (description: string) => ({ type: "string", description });
+const optStr = (description: string) => ({ type: ["string", "null"], description});
 const rs = (paise: number) => `Rs ${paise / 100}`;
 
 async function myDoctor(ctx: Ctx) {
@@ -57,9 +58,10 @@ const myAppointments: Tool = {
   name: "my_appointments",
   description: "List the patient's own appointments: upcoming, past or all.",
   roles: ["patient"],
-  schema: z.object({ when: z.enum(["upcoming", "past", "all"]).default("upcoming") }),
-  parameters: params({ when: { type: "string", enum: ["upcoming", "past", "all"] } }),
-  run: async (ctx, { when }) => {
+  schema: z.object({ when: z.enum(["upcoming", "past", "all"]).nullish() }),
+  parameters: params({ when: { type: ["string", "null"], enum: ["upcoming", "past", "all", null] } }),
+  run: async (ctx, a) => {
+    const when = a.when ?? "upcoming";
     const { today } = istNow();
     const rows = await getPatientAppointments(ctx.userId);
     const isUpcoming = (a: (typeof rows)[number]) => (a.status === "booked" || a.status === "pending_payment") && a.date >= today;
@@ -74,8 +76,8 @@ const searchDoctors: Tool = {
   name: "search_doctors",
   description: "Find doctors by name or specialization. Leave query empty to list doctors.",
   roles: ["patient"],
-  schema: z.object({ query: z.string().trim().max(80).optional() }),
-  parameters: params({ query: str("Name or specialization") }),
+  schema: z.object({ query: z.string().trim().max(80).nullish() }),
+  parameters: params({ query: optStr("Name or specialization") }),
   run: async (_ctx, { query }) =>
     (await listDoctors(query)).slice(0, 10).map((d) => ({
       id: d.id, name: d.name, specialization: d.specialization, experienceYears: d.experienceYears, feeRupees: d.fee,
@@ -96,9 +98,9 @@ const suggestSlots: Tool = {
   name: "suggest_slots",
   description: "Suggest alternative open slots when the requested time is unavailable. Searches the next 7 days.",
   roles: ["patient"],
-  schema: z.object({ doctorId: uuid, date, preferredTime: hhmm.optional() }),
+  schema: z.object({ doctorId: uuid, date, preferredTime: hhmm.nullish() }),
   parameters: params(
-    { doctorId: str("Doctor id"), date: str("YYYY-MM-DD to start from"), preferredTime: str("HH:MM the patient wanted") },
+    { doctorId: str("Doctor id"), date: str("YYYY-MM-DD to start from"), preferredTime: optStr("HH:MM the patient wanted") },
     ["doctorId", "date"]
   ),
   run: async (_ctx, { doctorId, date, preferredTime }) => suggest(doctorId, date, preferredTime),
@@ -123,9 +125,9 @@ const bookTool: Tool = {
   name: "book_appointment",
   description: "Propose booking a slot. The patient must confirm before anything is booked.",
   roles: ["patient"],
-  schema: z.object({ doctorId: uuid, date, startTime: hhmm, reason: z.string().trim().max(500).optional() }),
+  schema: z.object({ doctorId: uuid, date, startTime: hhmm, reason: z.string().trim().max(500).nullish() }),
   parameters: params(
-    { doctorId: str("Doctor id"), date: str("YYYY-MM-DD"), startTime: str("HH:MM, from get_slots"), reason: str("Optional reason for visit") },
+    { doctorId: str("Doctor id"), date: str("YYYY-MM-DD"), startTime: str("HH:MM, from get_slots"), reason: optStr("Optional reason for visit") },
     ["doctorId", "date", "startTime"]
   ),
   run: async (_ctx, { doctorId, date, startTime }) => {
@@ -137,7 +139,7 @@ const bookTool: Tool = {
     return { summary: `Book ${doc.name} on ${date}, ${slot.startTime} to ${slot.endTime}. ${fee}` };
   },
   execute: async (_ctx, a) => {
-    const res = await bookAppointment({ doctorId: a.doctorId, date: a.date, startTime: a.startTime, reason: a.reason });
+    const res = await bookAppointment({ doctorId: a.doctorId, date: a.date, startTime: a.startTime, reason: a.reason ?? undefined });
     if (!res.ok) return { ok: false, message: res.error };
     return res.checkout
       ? { ok: true, message: "The slot is held. Complete the payment to confirm your booking.", checkout: res.checkout }
@@ -205,8 +207,8 @@ const appointmentsOnDate: Tool = {
   name: "appointments_on_date",
   description: "The doctor's appointments on a date (today if no date is given).",
   roles: ["doctor"],
-  schema: z.object({ date: date.optional() }),
-  parameters: params({ date: str("YYYY-MM-DD, default today") }),
+  schema: z.object({ date: date.nullish() }),
+  parameters:params({ date: optStr("YYYY-MM-DD, default today") }),
   run: async (ctx, { date }) => {
     const day = date ?? istNow().today;
     return (await getDoctorAppointments(ctx.userId))
@@ -219,8 +221,8 @@ const appointmentStats: Tool = {
   name: "appointment_stats",
   description: "Counts of the doctor's appointments by status, optionally within a date range.",
   roles: ["doctor"],
-  schema: z.object({ from: date.optional(), to: date.optional() }),
-  parameters: params({ from: str("YYYY-MM-DD"), to: str("YYYY-MM-DD") }),
+  schema: z.object({ from: date.nullish(), to: date.nullish() }),
+  parameters: params({ from: optStr("YYYY-MM-DD"), to: optStr("YYYY-MM-DD") }),
   run: async (ctx, { from, to }) => {
     const rows = (await getDoctorAppointments(ctx.userId)).filter((a) => (!from || a.date >= from) && (!to || a.date <= to));
     const count = (s: string) => rows.filter((a) => a.status === s).length;
@@ -251,8 +253,8 @@ const findConflicts: Tool = {
   name: "find_conflicts",
   description: "Scheduling problems: overlapping appointments, appointments outside current hours, appointments on leave days.",
   roles: ["doctor"],
-  schema: z.object({ date: date.optional() }),
-  parameters: params({ date: str("YYYY-MM-DD, optional") }),
+  schema: z.object({ date: date.nullish() }),
+  parameters: params({ date: optStr("YYYY-MM-DD, optional") }),
   run: async (ctx, { date }) => {
     const doc = await myDoctor(ctx);
     const { today } = istNow();
@@ -292,8 +294,8 @@ const nextAvailable: Tool = {
   name: "next_available_slot",
   description: "The doctor's next open slot, searching up to 14 days ahead.",
   roles: ["doctor"],
-  schema: z.object({ fromDate: date.optional() }),
-  parameters: params({ fromDate: str("YYYY-MM-DD, default today") }),
+  schema: z.object({ fromDate: date.nullish() }),
+  parameters: params({ fromDate: optStr("YYYY-MM-DD, default today") }),
   run: async (ctx, { fromDate }) => {
     const doc = await myDoctor(ctx);
     const start = fromDate ?? istNow().today;
