@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reconcilePendingRefunds } from "@/lib/refunds";
 import { bookAppointment, cancelAppointment, rescheduleAppointment } from "@/actions/appointments";
 import { listLeaveDays } from "@/lib/leave";
 import type { CheckoutInfo } from "@/lib/payment-types";
@@ -112,11 +113,13 @@ const myPayments: Tool = {
   roles: ["patient"],
   schema: z.object({}),
   parameters: params({}),
-  run: async (ctx) =>
-    (await getPatientPayments(ctx.userId)).slice(0, 15).map((p) => ({
+    run: async (ctx) => {
+    await reconcilePendingRefunds(ctx.userId); // same refresh the Payment history page does
+    return (await getPatientPayments(ctx.userId)).slice(0, 15).map((p) => ({
       doctor: p.doctorName, date: p.date, amount: rs(p.amountPaise), status: p.status,
       refunds: p.refunds.map((r) => ({ amount: rs(r.amountPaise), status: r.status })),
-    })),
+    }));
+  },
 };
 
 // ---------- Patient: write (propose, then confirm) ----------

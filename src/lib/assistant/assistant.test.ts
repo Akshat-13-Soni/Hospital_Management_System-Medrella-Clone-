@@ -4,9 +4,11 @@ vi.mock("@/db", () => ({ db: {} }));
 vi.mock("@/actions/appointments", () => ({}));
 vi.mock("@/lib/queries", () => ({}));
 vi.mock("@/lib/leave", () => ({}));
+vi.mock("@/lib/refunds", () => ({ reconcilePendingRefunds: vi.fn() }));
 
 import { addDays, closestFirst, findOverlaps } from "./slot-suggest";
 import { getTool, toolsFor } from "./tools";
+import { reconcilePendingRefunds } from "../refunds";
 
 describe("tool scoping", () => {
   it("gives patients and doctors different tools", () => {
