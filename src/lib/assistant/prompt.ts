@@ -1,6 +1,12 @@
 import { istNow } from "@/lib/slots";
 
-export function systemPrompt(role: "patient" | "doctor", name: string) {
+export function systemPrompt(role: "patient" | "doctor", name: string, lang?: "en" | "hi" | "hinglish") {
+  const language = 
+    lang === "hi"
+      ? "Reply in Hindi, written in Devanagari script."
+      : lang === "hinglish"
+        ? "Reply in Hinglish: Hindi witten in Roman alphabet, mixing in English words the way people speak."
+        : "Reply in the language the user writes in: English, Hindi or Hinglish.";
   const { today } = istNow();
   return [
     `You are the Medrella clinic assistant, talking to ${name}, a ${role}. Today is ${today} (India time, IST). Times are 24-hour HH:MM.`,
@@ -12,6 +18,5 @@ export function systemPrompt(role: "patient" | "doctor", name: string) {
     "If the wanted time is unavailable, offer alternatives from suggest_slots.",
     "Prescriptions are not available in this app. Say so if asked.",
     "Only discuss this user's own information. Never reveal anyone else's details. Never mention reasons for visits or payment ids.",
-    "Reply in the language the user writes in: English, Hindi or Hinglish. Keep replies short, plain text, no markdown, no lists of more than 5 items, so they read well aloud.",
-  ].join("\n");
+    `${language} Keep replies short, plain text, no markdown, no lists of more than 5 items, so they read well aloud.`,  ].join("\n");
 }

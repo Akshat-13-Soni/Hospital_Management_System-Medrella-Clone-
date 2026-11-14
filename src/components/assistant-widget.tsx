@@ -4,14 +4,25 @@ import { useEffect, useRef, useState } from "react";
 import { cancelAssistantAction, confirmAssistantAction } from "@/actions/assistant";
 import { abandonPayment } from "@/actions/payments";
 import { Button } from "@/components/ui/button";
+import { useVoice, type VoiceLang } from "@/lib/assistant/use-voice";
+import { voiceIntent } from "@/lib/assistant/voice-intent";
 import { loadRazorpay, runCheckout } from "@/lib/razorpay-checkout";
 
 type Msg = { role: "user" | "assistant"; content: string };
 type Pending = { id: string; summary: string };
 
+// Models sometimes write special non-breaking spaces, which cannot wrap or be read aloud cleanly
+const clean = (s: string) => s.replace(/[\u202f\u00a0\u2009]/g, " ");
+
 const CHIPS: Record<"patient" | "doctor", string[]> = {
   patient: ["Show my upcoming appointments", "Find a cardiologist", "What are my payments?"],
   doctor: ["What are my appointments today?", "Any conflicts?", "When is my next free slot?"],
+};
+
+const CONFIRM_HINT: Record<VoiceLang, string> = {
+  en: "Say yes to confirm, or no to cancel.",
+  hi: "पुष्टि के लिए हाँ बोलें, रद्द करने के लिए नहीं।",
+  hinglish: "Confirm karne ke liye haan boliye, cancel karne ke liye nahi.",
 };
 
 export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
@@ -22,50 +33,81 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lang, setLang] = useState<VoiceLang>("en");
+  const [headphones, setHeadphones] = useState(false);
+
   const endRef = useRef<HTMLDivElement>(null);
+  const busyRef = useRef(false);
+  const listeningRef = useRef(false);
+  const onVoiceRef = useRef<(t: string) => void>(() => {});
+
+  const voice = useVoice({ lang, headphones, onFinal: (t) => onVoiceRef.current(t) });
+  const { speak, stop: stopMic, stopSpeaking, listening } = voice;
+
+  useEffect(() => {
+    listeningRef.current = listening;
+  });
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, pending, busy, open]);
 
-  const say = (content: string) => setMessages((m) => [...m, { role: "assistant", content }]);
+  useEffect(() => {
+    if (!open) {
+      stopMic();
+      stopSpeaking();
+    }
+  }, [open, stopMic, stopSpeaking]);
+
+  const say = (content: string) => {
+    const text = clean(content);
+    setMessages((m) => [...m, { role: "assistant", content: text }]);
+    if (listeningRef.current) speak(text);
+  };
 
   async function send(text: string) {
     const t = text.trim();
-    if (!t || busy) return;
-    setError(null);
-    // A new message replaces any change that was waiting for confirmation
-    if (pending) {
-      await cancelAssistantAction(pending.id);
-      setPending(null);
-    }
-    const next: Msg[] = [...messages, { role: "user", content: t }];
-    setMessages(next);
-    setInput("");
+    if (!t || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
+    setError(null);
     try {
+      // A new message replaces any change that was waiting for confirmation
+      if (pending) {
+        await cancelAssistantAction(pending.id);
+        setPending(null);
+      }
+      const next: Msg[] = [...messages, { role: "user", content: t }];
+      setMessages(next);
+      setInput("");
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next.slice(-20).map((m) => ({ ...m, content: m.content.slice(0, 1500) })) }),
+        body: JSON.stringify({ lang, messages: next.slice(-20).map((m) => ({ ...m, content: m.content.slice(0, 1500) })) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Something went wrong. Please try again.");
-      } else {
-        setMessages([...next, { role: "assistant", content: data.reply || "Sorry, I have no answer for that." }]);
-        setPending(data.pending ?? null);
+        return;
+      }
+      const reply = clean(data.reply || "Sorry, I have no answer for that.");
+      setMessages([...next, { role: "assistant", content: reply }]);
+      setPending(data.pending ?? null);
+      if (listeningRef.current) {
+        speak(data.pending ? `${clean(data.pending.summary)} ${CONFIRM_HINT[lang]}` : reply);
       }
     } catch {
       setError("Could not reach the assistant. Check your connection.");
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   async function confirm() {
-    if (!pending || busy) return;
+    if (!pending || busyRef.current) return;
     const p = pending;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -94,15 +136,42 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
       }
       router.refresh();
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
 
   async function cancel() {
-    if (!pending) return;
-    await cancelAssistantAction(pending.id);
+    if (!pending || busyRef.current) return;
+    const p = pending;
     setPending(null);
+    await cancelAssistantAction(p.id);
     say("Okay, I cancelled that. Nothing was changed.");
+  }
+
+  // Latest handler for speech. Yes or no only counts while a confirm card is showing.
+  useEffect(() => {
+    onVoiceRef.current = (text: string) => {
+      const t = text.trim();
+      if (!t || busyRef.current) return;
+      const intent = pending ? voiceIntent(t) : null;
+      if (intent) {
+        setMessages((m) => [...m, { role: "user", content: t }]);
+        if (intent === "yes") void confirm();
+        else void cancel();
+        return;
+      }
+      void send(t);
+    };
+  });
+
+  function toggleMic() {
+    if (listening) {
+      stopMic();
+      stopSpeaking();
+    } else {
+      voice.start();
+    }
   }
 
   return (
@@ -127,10 +196,31 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
             <p className="text-xs text-white/80">Changes only happen after you confirm</p>
           </header>
 
+          {voice.supported && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b bg-muted/40 px-4 py-2 text-xs">
+              <label className="flex items-center gap-1">
+                Language
+                <select
+                  value={lang}
+                  onChange={(e) => setLang(e.target.value as VoiceLang)}
+                  className="rounded border bg-background px-1 py-0.5"
+                >
+                  <option value="en">English</option>
+                  <option value="hi">हिन्दी</option>
+                  <option value="hinglish">Hinglish</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={headphones} onChange={(e) => setHeadphones(e.target.checked)} />
+                Headphones (speak to interrupt)
+              </label>
+            </div>
+          )}
+
           <div className="flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-4 py-3 text-sm" aria-live="polite">
             {messages.length === 0 && (
               <div className="space-y-2">
-                <p className="text-muted-foreground">Hi, how can I help? You can try:</p>
+                <p className="text-muted-foreground">Hi, how can I help? You can type, or use the microphone. Try:</p>
                 <div className="flex flex-wrap gap-2">
                   {CHIPS[role].map((c) => (
                     <button
@@ -154,7 +244,7 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
                     (m.role === "user" ? "bg-[#0E6B58] text-white" : "bg-muted text-foreground")
                   }
                 >
-                  {m.content.replace(/[\u202f\u00a0\u2009]/g, " ")}
+                  {clean(m.content)}
                 </p>
               </div>
             ))}
@@ -162,7 +252,7 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
             {pending && (
               <div className="rounded-xl border-2 border-[#0E6B58] bg-[#EAF5F1] p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-[#0E6B58]">Please confirm</p>
-                <p className="mt-1 text-[#10231F]">{pending.summary}</p>
+                <p className="mt-1 break-words text-[#10231F]">{clean(pending.summary)}</p>
                 <div className="mt-3 flex gap-2">
                   <Button size="sm" onClick={confirm} disabled={busy} className="bg-[#0E6B58] text-white hover:bg-[#0B5646]">
                     Confirm
@@ -184,7 +274,39 @@ export function AssistantWidget({ role }: { role: "patient" | "doctor" }) {
             <div ref={endRef} />
           </div>
 
+          {(listening || voice.speaking || voice.micError) && (
+            <div className="flex items-center justify-between gap-2 border-t bg-muted/40 px-4 py-2 text-xs">
+              <span role="status" className="min-w-0 break-words">
+                {voice.micError ??
+                  (voice.speaking ? "Speaking..." : voice.interim ? `Hearing: ${voice.interim}` : "Listening... just speak")}
+              </span>
+              {voice.speaking && (
+                <button
+                  type="button"
+                  onClick={stopSpeaking}
+                  className="shrink-0 rounded border px-2 py-0.5 font-medium hover:border-[#0E6B58]"
+                >
+                  Stop
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 border-t px-3 py-3">
+            {voice.supported && (
+              <button
+                type="button"
+                onClick={toggleMic}
+                aria-pressed={listening}
+                aria-label={listening ? "Stop listening" : "Start voice conversation"}
+                className={
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-lg " +
+                  (listening ? "animate-pulse border-red-500 bg-red-50" : "bg-background hover:border-[#0E6B58]")
+                }
+              >
+                🎤
+              </button>
+            )}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}

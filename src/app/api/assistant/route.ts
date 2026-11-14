@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_STEPS = 5;
 const body = z.object({
+  lang: z.enum(["en", "hi", "hinglish"]).optional(),
   messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(1500) })).min(1).max(20),
 });
 
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
     type: "function" as const,
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
-  const messages: ChatMsg[] = [{ role: "system", content: systemPrompt(ctx.role, ctx.name) }, ...parsed.data.messages];
+  const messages: ChatMsg[] = [{ role: "system", content: systemPrompt(ctx.role, ctx.name, parsed.data.lang) }, ...parsed.data.messages];
   const state: State = { pending: null };
 
   try {
