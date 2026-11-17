@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 import { cancelAppointment } from "@/actions/appointments";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { CancelButton } from "@/components/cancel-button";
 import { DateBlock } from "@/components/date-block";
 import { StatusBadge } from "@/components/status-badge";
@@ -9,6 +10,7 @@ import { requireRole } from "@/lib/auth-guard";
 import { prettyDate } from "@/lib/format";
 import { rupees } from "@/lib/money";
 import { getPaidAmounts, getPatientAppointments } from "@/lib/queries";
+import { getPatientQueueInfo } from "@/lib/queue";
 import { refundFor } from "@/lib/refund-policy";
 import { istNow } from "@/lib/slots";
 import { cn } from "@/lib/utils";
@@ -23,6 +25,16 @@ export default async function PatientDashboard() {
   const history = all.filter((a) => !isUpcoming(a)).reverse();
   const completed = all.filter((a) => a.status === "completed").length;
   const cancelled = all.filter((a) => a.status === "cancelled").length;
+
+  // Queue state for today's appointments (token, position, who is being served)
+  const queueInfo = new Map(
+    await Promise.all(
+      upcoming
+        .filter((a) => a.date === today)
+        .map(async (a) => [a.id, await getPatientQueueInfo(a.id)] as const)
+    )
+  );
+  const live = [...queueInfo.values()].some((q) => q !== null);
 
   const stats = [
     { label: "Upcoming", value: upcoming.length },
@@ -41,6 +53,8 @@ export default async function PatientDashboard() {
 
   return (
     <div className="space-y-8">
+      {live && <AutoRefresh />}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-[#10231F]">Hi, {s.name}</h1>
@@ -89,34 +103,57 @@ export default async function PatientDashboard() {
           </div>
         )}
 
-        {upcoming.map((a) => (
-          <div key={a.id} className="flex flex-wrap items-center gap-4 rounded-2xl border bg-card p-4">
-            <DateBlock date={a.date} />
-            <div className="min-w-0 flex-1 text-sm">
-              <p className="font-semibold text-[#10231F]">{a.doctorName}</p>
-              <p className="text-muted-foreground">{a.specialization}</p>
-              <p className="mt-1">
-                {prettyDate(a.date)}, {a.startTime} to {a.endTime}
-              </p>
-              {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
-              {paid.get(a.id) ? (
-                <p className="mt-1 text-xs font-medium text-[#0E6B58]">Paid {rupees(paid.get(a.id)!)}</p>
-              ) : null}
+        {upcoming.map((a) => {
+          const qi = queueInfo.get(a.id);
+          return (
+            <div key={a.id} className="flex flex-wrap items-center gap-4 rounded-2xl border bg-card p-4">
+              <DateBlock date={a.date} />
+              <div className="min-w-0 flex-1 text-sm">
+                <p className="font-semibold text-[#10231F]">{a.doctorName}</p>
+                <p className="text-muted-foreground">{a.specialization}</p>
+                <p className="mt-1">
+                  {prettyDate(a.date)}, {a.startTime} to {a.endTime}
+                </p>
+                {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
+                {paid.get(a.id) ? (
+                  <p className="mt-1 text-xs font-medium text-[#0E6B58]">Paid {rupees(paid.get(a.id)!)}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={a.status} />
+                {!qi && (
+                  <Link
+                    href={`/patient/reschedule/${a.id}`}
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                  >
+                    Reschedule
+                  </Link>
+                )}
+                {qi?.status !== "in_consultation" && (
+                  <form action={cancelAppointment.bind(null, a.id)}>
+                    <CancelButton message={cancelMessage(a)} />
+                  </form>
+                )}
+              </div>
+
+              {qi && (
+                <div className="basis-full rounded-xl border border-[#0E6B58]/30 bg-[#0E6B58]/5 p-3 text-sm">
+                  {qi.status === "in_consultation" ? (
+                    <p className="font-medium text-[#0E6B58]">It&apos;s your turn. Token {qi.tokenNo}</p>
+                  ) : (
+                    <p>
+                      <span className="font-semibold text-[#0E6B58]">Token {qi.tokenNo}</span>
+                      {" · "}
+                      {qi.position === 1 ? "You are next" : `Position ${qi.position} in line`}
+                      {" · "}
+                      {qi.nowServing ? `Now serving token ${qi.nowServing}` : "Waiting for the doctor to start"}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={a.status} />
-              <Link
-                href={`/patient/reschedule/${a.id}`}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
-                Reschedule
-              </Link>
-              <form action={cancelAppointment.bind(null, a.id)}>
-                <CancelButton message={cancelMessage(a)} />
-              </form>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       {history.length > 0 && (

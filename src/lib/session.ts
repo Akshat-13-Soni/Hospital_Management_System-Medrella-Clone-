@@ -1,9 +1,10 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import type { Role } from "./auth-guard";
 
 const key = new TextEncoder().encode(process.env.JWT_SECRET);
 
-export type Session = { userId: string; role: "patient" | "doctor"; name: string };
+export type Session = { userId: string; role: Role; name: string };
 
 export async function createSession(s: Session) {
   const token = await new SignJWT({ ...s })

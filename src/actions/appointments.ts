@@ -14,6 +14,7 @@ import { cancelReminders, rescheduleReminders, scheduleReminders } from "@/lib/r
 import { getSession } from "@/lib/session";
 import { bookSchema, rescheduleSchema } from "@/lib/validators";
 import { isOnLeave } from "@/lib/leave";
+import { finishQueueEntry, hasActiveQueueEntry } from "@/lib/queue";
 
 type Result = { ok: true } | { ok: false; error: string };
 type BookResult = { ok: true; checkout: CheckoutInfo | null } | { ok: false; error: string };
@@ -128,6 +129,9 @@ export async function rescheduleAppointment(input: unknown): Promise<Result> {
   const [appt] = await db.select().from(appointments).where(eq(appointments.id, appointmentId));
   if (!appt || appt.patientId !== session.userId) return { ok: false, error: "Appointment not found" };
   if (appt.status !== "booked") return { ok: false, error: "Only booked appointments can be rescheduled" };
+  if(await hasActiveQueueEntry(appointmentId)) {
+    return { ok: false, error: "You are already checked in, so this appointment can't be rescheduled." };
+  }
 
   await releaseExpiredHolds();
     if (await isOnLeave(appt.doctorId, date)) return { ok: false, error: "The doctor is on leave that day. Pick another date." };
@@ -191,6 +195,7 @@ export async function completeAppointment(id: string) {
   if (session.userId !== appt.doctorUserId) throw new Error("Forbidden");
   if (appt.status !== "booked") return;
   await db.update(appointments).set({ status: "completed" }).where(eq(appointments.id, id));
+  await finishQueueEntry(id);
   await cancelReminders(id); // completed appointments never get reminders
   revalidatePath("/doctor");
 }

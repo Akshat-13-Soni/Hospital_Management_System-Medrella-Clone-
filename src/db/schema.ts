@@ -3,10 +3,11 @@ import {
   pgTable, pgEnum, uuid, text, jsonb, integer, timestamp, date, uniqueIndex, index,
   boolean,
 } from "drizzle-orm/pg-core";
+import { finished } from "stream";
 
-export const roleEnum = pgEnum("role", ["patient", "doctor"]);
+export const roleEnum = pgEnum("role", ["patient", "doctor", "receptionist"]);
 export const statusEnum = pgEnum("appointment_status", [
-  "booked", "cancelled", "completed", "pending_payment",
+  "booked", "cancelled", "completed", "pending_payment", "no_show",
 ]);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "created", "pending", "paid", "failed", "abandoned", "refunded", "partially_refunded",
@@ -72,7 +73,7 @@ export const appointments = pgTable(
     //A seat in a slot can only be held by one active appointment. This is the capcity lock.
     uniqueIndex("one_booking_per_seat")
       .on(t.doctorId, t.date, t.startTime, t.seatNo)
-      .where(sql`${t.status} not in ('cancelled', 'completed')`),
+      .where(sql`${t.status} not in ('cancelled', 'completed', 'no_show)`),
   ]
 );
 
@@ -250,4 +251,28 @@ export const assistantActions = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("assistant_actions_user").on(t.userId, t.status)]
+);
+
+// One row per checked-in appointment. Position is never stored: it is computed from the
+// waiting rows, so cancellations and no-shows fix everyone's position automatically.
+export const queueEntries = pgTable(
+  "queue_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id").notNull().unique() // unique = no duplicate check-in
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    doctorId: uuid("doctor_id").notNull()
+      .references(() => doctors.id, { onDelete: "cascade" }),
+    queueDate: date("queue_date", { mode: "string" }).notNull(),
+    tokenNo: integer("token_no"),  //null only for a no-show that never checked in.
+    status: text("status").default("waiting").notNull(), // waiting | in_consultation | completed | no_show | cancelled
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }).defaultNow().notNull(),
+    checkedInBy: uuid("checked_in_by").references(() => users.id),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("queue_token_per_day").on(t.doctorId, t.queueDate, t.tokenNo),
+    index("queue_doctor_day").on(t.doctorId, t.queueDate, t.status),
+  ]
 );

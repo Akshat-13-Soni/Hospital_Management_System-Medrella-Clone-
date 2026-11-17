@@ -6,9 +6,17 @@ import { getUnreadCount } from "@/lib/queries";
 import { getSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
+const DASHBOARD = {
+  patient: { href: "/patient", label: "My appointments" },
+  doctor: { href: "/doctor", label: "Dashboard" },
+  receptionist: { href: "/receptionist", label: "Reception" },
+} as const;
+
 export async function Navbar() {
   const s = await getSession();
-  const unread = s ? await getUnreadCount(s.userId) : 0;
+  const isStaff = s?.role === "receptionist";
+  // Receptionists get no notifications, so skip the query for them
+  const unread = s && !isStaff ? await getUnreadCount(s.userId) : 0;
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
@@ -21,7 +29,7 @@ export async function Navbar() {
         </Link>
 
         <nav className="flex flex-wrap items-center justify-end gap-1">
-          <NavLink href="/doctors">Find doctors</NavLink>
+          {!isStaff && <NavLink href="/doctors">Find doctors</NavLink>}
           {!s ? (
             <>
               <NavLink href="/login">Log in</NavLink>
@@ -37,17 +45,17 @@ export async function Navbar() {
             </>
           ) : (
             <>
-              <NavLink href={s.role === "doctor" ? "/doctor" : "/patient"}>
-                {s.role === "doctor" ? "Dashboard" : "My appointments"}
-              </NavLink>
-              <NavLink href="/notifications">
-                Notifications
-                {unread > 0 && (
-                  <span className="ml-1.5 rounded-full bg-red-600 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">
-                    {unread}
-                  </span>
-                )}
-              </NavLink>
+              <NavLink href={DASHBOARD[s.role].href}>{DASHBOARD[s.role].label}</NavLink>
+              {!isStaff && (
+                <NavLink href="/notifications">
+                  Notifications
+                  {unread > 0 && (
+                    <span className="ml-1.5 rounded-full bg-red-600 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">
+                      {unread}
+                    </span>
+                  )}
+                </NavLink>
+              )}
               <span className="ml-1 hidden items-center gap-2 border-l pl-3 sm:flex">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#EAF5F1] text-xs font-semibold text-[#0E6B58]">
                   {s.name.charAt(0).toUpperCase()}

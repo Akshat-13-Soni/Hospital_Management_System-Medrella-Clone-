@@ -23,7 +23,9 @@ export async function confirmAssistantAction(id: string): Promise<ExecResult> {
     };
     return { ok: false, message: why[claim.reason] ?? "That request is no longer valid." };
   }
-
+  if (session.role === "receptionist") {
+    return { ok: false, message: "The assistant is not available for this role." };
+  }
   const tool = getTool(claim.row.tool, session.role);
   const args = tool?.schema.safeParse(claim.row.args);
   if (!tool?.execute || !args?.success) {
