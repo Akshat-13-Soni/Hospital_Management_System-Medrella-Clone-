@@ -1,33 +1,42 @@
 import { cancelAppointment, completeAppointment } from "@/actions/appointments";
 import { addLeave, removeAvailability, removeLeave, removeSchedule } from "@/actions/doctor";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { AvailabilityForm } from "@/components/availability-form";
+import { CancelButton } from "@/components/cancel-button";
 import { DateBlock } from "@/components/date-block";
 import { DoctorAvatar } from "@/components/doctor-avatar";
 import { ProfileForm } from "@/components/profile-form";
+import { QueueCard } from "@/components/queue-card";
+import { ScheduleForm } from "@/components/schedule-form";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { requireRole } from "@/lib/auth-guard";
 import { DAYS, prettyDate } from "@/lib/format";
-import { getAvailability, getDoctorAppointments, getDoctorByUserId, getSchedules, getOutsideHours } from "@/lib/queries";
-import { ScheduleForm } from "@/components/schedule-form";
 import { listLeaveDays } from "@/lib/leave";
+import { getAvailability, getDoctorAppointments, getDoctorByUserId, getOutsideHours, getSchedules } from "@/lib/queries";
+import { getDoctorQueue } from "@/lib/queue";
+import type { QueueRow } from "@/lib/queue-rank";
 import { istNow } from "@/lib/slots";
-import { CancelButton } from "@/components/cancel-button";
 
 export default async function DoctorDashboard() {
   const s = await requireRole("doctor");
   const doc = await getDoctorByUserId(s.userId);
   if (!doc) return <p>Doctor profile not found.</p>;
 
-  const [appts, avail, leaveDays, scheds, outside] = await Promise.all([
+  const { today } = istNow();
+
+  const [appts, avail, leaveDays, scheds, outside, queue] = await Promise.all([
     getDoctorAppointments(s.userId),
     getAvailability(doc.id),
     listLeaveDays(doc.id),
     getSchedules(doc.id),
     getOutsideHours(doc.id),
+    getDoctorQueue(doc.id, today),
   ]);
 
-  const { today } = istNow();
+  const queueByAppt = new Map(queue.map((q) => [q.appointmentId, q]));
+  const clock = (d: Date | string) =>
+    new Date(d).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
 
   const isUpcoming = (a: (typeof appts)[number]) => a.status === "booked" && a.date >= today;
   const upcoming = appts.filter(isUpcoming);
@@ -40,6 +49,8 @@ export default async function DoctorDashboard() {
 
   return (
     <div className="space-y-8">
+      <AutoRefresh />
+
       <div className="flex items-center gap-4">
         <DoctorAvatar name={s.name} className="h-14 w-14 text-lg" />
         <div>
@@ -62,7 +73,7 @@ export default async function DoctorDashboard() {
           You have no working hours set, so patients cannot book yet. Add them in the availability section below.
         </div>
       )}
-            {outside.length > 0 && (
+      {outside.length > 0 && (
         <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-medium">
             {outside.length} booked appointment{outside.length > 1 ? "s are" : " is"} outside your current working hours.
@@ -75,6 +86,9 @@ export default async function DoctorDashboard() {
           </ul>
         </div>
       )}
+
+      <QueueCard entries={queue as (QueueRow & { patientName: string })[]} />
+
       <section className="space-y-3">
         <h2 className="font-semibold text-[#10231F]">Upcoming appointments</h2>
         {upcoming.length === 0 && (
@@ -85,28 +99,42 @@ export default async function DoctorDashboard() {
             </p>
           </div>
         )}
-        {upcoming.map((a) => (
-          <div key={a.id} className="flex flex-wrap items-center gap-4 rounded-2xl border bg-card p-4">
-            <DateBlock date={a.date} />
-            <div className="min-w-0 flex-1 text-sm">
-              <p className="font-semibold text-[#10231F]">{a.patientName}</p>
-              <p className="text-muted-foreground">{a.patientEmail}</p>
-              <p className="mt-1">{prettyDate(a.date)}, {a.startTime} to {a.endTime}</p>
-              {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
+        {upcoming.map((a) => {
+          const q = queueByAppt.get(a.id);
+          return (
+            <div key={a.id} className="flex flex-wrap items-center gap-4 rounded-2xl border bg-card p-4">
+              <DateBlock date={a.date} />
+              <div className="min-w-0 flex-1 text-sm">
+                <p className="font-semibold text-[#10231F]">{a.patientName}</p>
+                <p className="text-muted-foreground">{a.patientEmail}</p>
+                <p className="mt-1">{prettyDate(a.date)}, {a.startTime} to {a.endTime}</p>
+                {a.reason && <p className="text-muted-foreground">Reason: {a.reason}</p>}
+                {q && (
+                  <p className="mt-1 font-medium text-[#0E6B58]">
+                    Token {q.tokenNo} · {q.status === "in_consultation" ? "In consultation" : `Checked in ${clock(q.checkedInAt)}`}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {a.status === "no_show" ? (
+                  <span className="rounded-full border px-2.5 py-0.5 text-xs font-medium">No-show</span>
+                ) : (
+                  <StatusBadge status={a.status} />
+                )}
+                <form action={completeAppointment.bind(null, a.id)}>
+                  <Button type="submit" size="sm" className="bg-[#0E6B58] text-white hover:bg-[#0B5646]">
+                    Mark complete
+                  </Button>
+                </form>
+                {q?.status !== "in_consultation" && (
+                  <form action={cancelAppointment.bind(null, a.id)}>
+                    <CancelButton message="Cancel this appointment? If the patient has paid, they will be refunded in full." />
+                  </form>
+                )}
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={a.status} />
-              <form action={completeAppointment.bind(null, a.id)}>
-                <Button type="submit" size="sm" className="bg-[#0E6B58] text-white hover:bg-[#0B5646]">
-                  Mark complete
-                </Button>
-              </form>
-              <form action={cancelAppointment.bind(null, a.id)}>
-                <CancelButton message="Cancel this appointment? If the patient has paid, they will be refunded in full." />
-              </form>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       {past.length > 0 && (
@@ -119,7 +147,11 @@ export default async function DoctorDashboard() {
                 <p className="font-medium text-[#10231F]">{a.patientName}</p>
                 <p className="text-muted-foreground">{prettyDate(a.date)}, {a.startTime} to {a.endTime}</p>
               </div>
-              <StatusBadge status={a.status} />
+              {a.status === "no_show" ? (
+                <span className="rounded-full border px-2.5 py-0.5 text-xs font-medium">No-show</span>
+              ) : (
+                <StatusBadge status={a.status} />
+              )}
             </div>
           ))}
         </section>
@@ -146,7 +178,8 @@ export default async function DoctorDashboard() {
         )}
         <AvailabilityForm />
       </section>
-            <section className="space-y-4 rounded-2xl border bg-card p-6">
+
+      <section className="space-y-4 rounded-2xl border bg-card p-6">
         <h2 className="font-semibold text-[#10231F]">Wave and stream schedules</h2>
         <p className="text-sm text-muted-foreground">
           A one-off date overrides the weekly schedule, and a weekly schedule overrides the working hours above.
@@ -170,6 +203,7 @@ export default async function DoctorDashboard() {
         )}
         <ScheduleForm />
       </section>
+
       <section className="space-y-4 rounded-2xl border bg-card p-6">
         <h2 className="font-semibold text-[#10231F]">Days off</h2>
         <p className="text-sm text-muted-foreground">

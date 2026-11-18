@@ -4,12 +4,19 @@ import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { doctors, users } from "@/db/schema";
+import type { Role } from "@/lib/auth-guard";
 import { createSession, destroySession } from "@/lib/session";
 import { loginSchema, signupSchema } from "@/lib/validators";
 
 export type ActionState =
   | { error?: string; success?: boolean; fieldErrors?: Record<string, string[] | undefined> }
   | undefined;
+
+const HOME: Record<Role, string> = {
+  patient: "/patient",
+  doctor: "/doctor",
+  receptionist: "/receptionist",
+};
 
 export async function signup(_: ActionState, formData: FormData): Promise<ActionState> {
   const parsed = signupSchema.safeParse(Object.fromEntries(formData));
@@ -33,7 +40,7 @@ export async function signup(_: ActionState, formData: FormData): Promise<Action
   }
 
   await createSession({ userId: user.id, role: user.role, name: user.name });
-  redirect(user.role === "doctor" ? "/doctor" : "/patient");
+  redirect(HOME[user.role]);
 }
 
 export async function login(_: ActionState, formData: FormData): Promise<ActionState> {
@@ -45,7 +52,7 @@ export async function login(_: ActionState, formData: FormData): Promise<ActionS
   if (!ok) return { error: "Invalid email or password" };
 
   await createSession({ userId: user.id, role: user.role, name: user.name });
-  redirect(user.role === "doctor" ? "/doctor" : "/patient");
+  redirect(HOME[user.role]);
 }
 
 export async function logout() {

@@ -17,8 +17,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="min-h-screen bg-background text-foreground antialiased">
         <Navbar />
         <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
-        {session && <AssistantWidget role={session.role} />}
-      </body>
+          {session && session.role !== "receptionist" && <AssistantWidget role={session.role} />}
+        </body>
     </html>
   );
 }

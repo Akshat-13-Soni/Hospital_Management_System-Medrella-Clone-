@@ -6,6 +6,7 @@ import { rupees } from "./money";
 import { refundFor } from "./refund-policy";
 import { issueRefund } from "./refunds";
 import { cancelReminders } from "./reminders";
+import { cancelQueueEntry  } from "./queue";
 
 export async function cancelBooked(input: { appointmentId: string; by: "patient" | "doctor" | "leave" }) {
   // Only one caller can win this update, so nothing below can run twice
@@ -17,6 +18,7 @@ export async function cancelBooked(input: { appointmentId: string; by: "patient"
   if (!a) return false;
 
   await cancelReminders(a.id);
+  await cancelQueueEntry(a.id);  //frees the token so everyone behind moves up
 
   let note = "";
   const [pay] = await db

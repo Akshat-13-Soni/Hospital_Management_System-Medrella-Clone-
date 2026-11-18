@@ -60,6 +60,9 @@ async function runCall(name: string, rawArgs: string, ctx: Ctx, state: State) {
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Please sign in." }, { status: 401 });
+  if (session.role === "receptionist") {
+    return NextResponse.json({ error: "The assistant is not available for this role." }, { status: 403});
+  }
   if (!llmConfigured()) return NextResponse.json({ error: "The assistant is not set up yet." }, { status: 503 });
   if (limited(session.userId)) return NextResponse.json({ error: "Too many requests. Please wait a few minutes." }, { status: 429 });
 

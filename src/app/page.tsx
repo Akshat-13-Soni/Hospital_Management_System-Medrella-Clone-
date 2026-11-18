@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
+import { HOME } from "@/lib/auth-guard";
 
 const specialties = ["Cardiology", "Dermatology", "Pediatrics"];
 
@@ -26,7 +27,7 @@ const secondary =
 
 export default async function Home() {
   const session = await getSession();
-  if (session) redirect(session.role === "doctor" ? "/doctor" : "/patient");
+    if (session) redirect(HOME[session.role]);
 
   return (
     <div className="space-y-20 pb-8">
